@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Panel</title>
+<style>
+  html,body{margin:0;height:100%;background:#111;color:#8a8a8a;
+    font-family:Roboto,Helvetica,Arial,sans-serif}
+  #m{display:flex;height:100%;align-items:center;justify-content:center;
+    text-align:center;font-size:18px;padding:24px}
+  a{color:#03a9f4}
+</style>
+</head>
+<body>
+<div id="m">Signing in&hellip;</div>
+<script>
+// Crestron TSW-1060 kiosk auto-login.
+// Completes the Home Assistant trusted_networks auth flow and stores the
+// resulting tokens the same way the Home Assistant frontend does, so the
+// panel lands on the dashboard without anyone touching the screen.
+// Only works from the panel's own address, which the trusted_networks config pins.
+(function () {
+  var TARGET = "/wall-panel/meadow";  // the Meadow is the landing view
+
+  // Home and the bulb close the browser (docs: the side keys). crestron-keys.js
+  // records which view the key wanted; honour it if it is fresh, so the bulb
+  // reopens on Lights rather than the Meadow.
+  try {
+    var next = JSON.parse(localStorage.getItem("crestronNext") || "null");
+    localStorage.removeItem("crestronNext");
+    if (next && Date.now() - next.at < 60000 && /^\/wall-panel\/[a-z-]+$/.test(next.path)) TARGET = next.path;
+  } catch (e) { /* no storage or bad value: land on the Meadow */ }
+  var ORIGIN = window.location.origin;
+  var CLIENT_ID = ORIGIN + "/";
+  var msg = document.getElementById("m");
+
+  function fail(why) {
+    msg.innerHTML = "Could not sign in.<br><br>" + why +
+      '<br><br><a href="' + TARGET + '">Open Home Assistant anyway</a>';
+  }
+
+  // Per-browser frontend preferences. Reboots wipe storage, so set them on
+  // every visit: no sidebar, and the panel theme regardless of the house-wide
+  // theme the "follows the sun" automation is currently pushing.
+  try {
+    localStorage.setItem("dockedSidebar", JSON.stringify("always_hidden"));
+    localStorage.setItem("selectedTheme", JSON.stringify({ theme: "Wall Panel", dark: true }));
+    // Keep the websocket open while the screen is in standby. The default
+    // closes it after five minutes hidden, and waking then rebuilt the page.
+    localStorage.setItem("suspendWhenHidden", JSON.stringify(false));
+  } catch (e) { /* storage unavailable; the theme is also pinned on the view */ }
+
+  // Already holding tokens: hand straight over to the frontend.
+  try {
+    if (localStorage.getItem("hassTokens")) {
+      window.location.replace(TARGET);
+      return;
+    }
+  } catch (e) { /* storage unavailable; fall through and try to log in */ }
+
+  function postJSON(path, body) {
+    return fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      return r.json().then(function (j) {
+        if (!r.ok) throw new Error(path + " returned " + r.status);
+        return j;
+      });
+    });
+  }
+
+  postJSON("/auth/login_flow", {
+    client_id: CLIENT_ID,
+    handler: ["trusted_networks", null],
+    redirect_uri: CLIENT_ID
+  })
+    .then(function (flow) {
+      if (flow.type !== "create_entry" || !flow.result) {
+        // Panel is not on a trusted address, or the provider is disabled.
+        throw new Error("trusted_networks did not grant a code");
+      }
+      var form = "grant_type=authorization_code" +
+        "&code=" + encodeURIComponent(flow.result) +
+        "&client_id=" + encodeURIComponent(CLIENT_ID);
+      return fetch("/auth/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: form
+      });
+    })
+    .then(function (r) {
+      if (!r.ok) throw new Error("/auth/token returned " + r.status);
+      return r.json();
+    })
+    .then(function (t) {
+      // Shape must match what home-assistant-js-websocket expects to read back.
+      t.hassUrl = ORIGIN;
+      t.clientId = CLIENT_ID;
+      t.expires = t.expires_in * 1000 + new Date().getTime();
+      localStorage.setItem("hassTokens", JSON.stringify(t));
+      window.location.replace(TARGET);
+    })
+    .catch(function (e) { fail(String(e.message || e)); });
+})();
+</script>
+</body>
+</html>

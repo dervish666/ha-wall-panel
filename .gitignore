@@ -1,0 +1,15 @@
+# Secrets and per-install files
+secrets.yaml
+crestron_panel.json
+family-extra.json
+*.ch5z
+archive/
+
+# Panel screenshots from tools/shot.sh
+shots/
+
+.DS_Store
+__pycache__/
+
+# Local agent tooling state
+.recall/

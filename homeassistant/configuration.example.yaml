@@ -1,0 +1,227 @@
+# The wall panel's share of configuration.yaml. This is NOT a whole file:
+# merge each block into your own configuration.yaml by hand. If you already
+# have a homeassistant:, frontend:, lovelace:, shell_command:, template: or
+# command_line: key, add these entries under it rather than pasting a second
+# copy of the key (YAML keeps only the last one, silently).
+#
+# Placeholders to replace:
+#   192.168.1.50          the panel's IP address (give it a DHCP reservation)
+#   <panel user id>       the id of the HA user the panel signs in as
+#   HOME_ASSISTANT_IP     your Home Assistant's LAN address
+#   calendar.*            your own calendars, and the names they map to
+
+homeassistant:
+  auth_providers:
+    # Normal password login. Do NOT delete this entry: specifying auth_providers
+    # replaces the defaults, so removing it locks everyone out of Home Assistant.
+    - type: homeassistant
+    # Auto-login for the wall panel only.
+    # The panel MUST hold a DHCP reservation on this address, otherwise any
+    # device that lands on it is silently logged in as the panel's user.
+    # Make that user a plain (non-admin) user, and give it nothing else.
+    # Its id is under Settings > People > Users (turn on Advanced mode), or in
+    # .storage/auth.
+    - type: trusted_networks
+      trusted_networks:
+        - 192.168.1.50/32
+      trusted_users:
+        192.168.1.50/32: <panel user id>
+      allow_bypass_login: true
+
+frontend:
+  themes: !include_dir_merge_named themes
+  # The TSW-1060's browser gets Home Assistant's legacy build, which ignores
+  # extra_module_url, so its font loader and side-button handler go here.
+  # Everything under www/ is cached for a month by the panel: bump ?v= on
+  # every change or it will keep running the old copy.
+  extra_js_url_es5:
+    - /local/panel-fonts.js?v=1
+    - /local/crestron-keys.js?v=1
+
+lovelace:
+  dashboards:
+    wall-panel:
+      mode: yaml
+      filename: dashboards/wall-panel.yaml
+      title: Wall Panel
+      icon: mdi:tablet-dashboard
+      show_in_sidebar: true
+      require_admin: false
+
+# The panel's user project (crestron/launcher) fires the crestron-open-browser
+# webhook on every boot; the automation answers by opening the panel's real
+# browser over SSH. crestron_cmd.py reads the panel's address and login from
+# /config/scripts/crestron_panel.json (see crestron_panel.example.json).
+# Crestron-only: skip both commands on any other tablet.
+shell_command:
+  crestron_browser_open: python3 /config/scripts/crestron_cmd.py BROWSEROPEN "http://HOME_ASSISTANT_IP:8123/local/kiosk.html?b=$(date +%s)"
+  # The page dims the backlight itself instead of using panel standby, because
+  # waking from standby reloads the browser page.
+  crestron_brightness: "python3 /config/scripts/crestron_cmd.py BRIGHTNESS {{ level | int(100) }}"
+
+# ── Today's family agenda ──────────────────────────────────────────────────
+# One trigger-based template sensor calls calendar.get_events across every
+# family calendar in a single shot, flattens every event into a list tagged
+# with whose it is, and exposes it as one attribute for the panel to render.
+# Refreshes at startup, every 5 minutes, and a minute after midnight.
+#
+# The owner map turns a calendar into a name. Those names are what the
+# dashboard filters on (selectattr('who','eq','Alex')), so a person's panel
+# and subview only fill if the spelling matches here. Anything not in the map
+# lands on House.
+#
+# checked_at is not decoration. If get_events fails the action aborts and the
+# sensor silently keeps yesterday's list, so the panel shows the age and says so
+# out loud rather than letting a stale day read as a quiet one.
+template:
+  - trigger:
+      - trigger: homeassistant
+        event: start
+      - trigger: time_pattern
+        minutes: "/5"
+      - trigger: time
+        at: "00:01:00"
+    action:
+      - action: calendar.get_events
+        target:
+          entity_id:
+            - calendar.alex
+            - calendar.alex_work
+            - calendar.jo
+            - calendar.rory
+            - calendar.mia
+            - calendar.ivy
+            - calendar.family
+            - calendar.birthdays
+            - calendar.public_holidays
+        data:
+          start_date_time: "{{ today_at('00:00') }}"
+          duration:
+            hours: 24
+        response_variable: agenda
+    sensor:
+      - name: Family Today
+        unique_id: family_today
+        icon: mdi:calendar-today
+        state: "{{ agenda.values() | map(attribute='events') | map('count') | sum }}"
+        attributes:
+          checked_at: "{{ now().isoformat() }}"
+          events: >-
+            {% set owner = {
+              'calendar.alex': 'Alex',
+              'calendar.alex_work': 'Alex',
+              'calendar.jo': 'Jo',
+              'calendar.rory': 'Rory',
+              'calendar.mia': 'Mia',
+              'calendar.ivy': 'Ivy',
+              'calendar.family': 'House',
+              'calendar.birthdays': 'House',
+              'calendar.public_holidays': 'House'
+            } %}
+            {% set ns = namespace(rows=[]) %}
+            {% for cal, payload in agenda.items() %}
+              {% for e in payload.events %}
+                {% set allday = 'T' not in e.start %}
+                {% set ns.rows = ns.rows + [{
+                  'who': owner.get(cal, 'House'),
+                  'what': e.summary,
+                  'all_day': allday,
+                  'start': e.start,
+                  'at': '' if allday else as_local(as_datetime(e.start)).strftime('%H:%M')
+                }] %}
+              {% endfor %}
+            {% endfor %}
+            {{ ns.rows | sort(attribute='start') }}
+
+# ── The week ahead, per person ─────────────────────────────────────────────
+# Same shape as sensor.family_today but seven days wide, for the per-person
+# subviews and the Meadow. Slower refresh: a week's agenda does not change
+# every five minutes. Fields are kept lean deliberately. State attributes over
+# ~16KB get dropped by the recorder, and a dozen calendars x 7 days is how you
+# get there.
+  - trigger:
+      - trigger: homeassistant
+        event: start
+      - trigger: time_pattern
+        minutes: "/15"
+      - trigger: time
+        at: "00:02:00"
+    action:
+      - action: calendar.get_events
+        target:
+          entity_id:
+            - calendar.alex
+            - calendar.alex_work
+            - calendar.jo
+            - calendar.rory
+            - calendar.mia
+            - calendar.ivy
+            - calendar.family
+            - calendar.birthdays
+            - calendar.public_holidays
+        data:
+          start_date_time: "{{ today_at('00:00') }}"
+          duration:
+            days: 7
+        response_variable: week
+    sensor:
+      - name: Family Week
+        unique_id: family_week
+        icon: mdi:calendar-week
+        state: "{{ week.values() | map(attribute='events') | map('count') | sum }}"
+        attributes:
+          checked_at: "{{ now().isoformat() }}"
+          events: >-
+            {% set owner = {
+              'calendar.alex': 'Alex',
+              'calendar.alex_work': 'Alex',
+              'calendar.jo': 'Jo',
+              'calendar.rory': 'Rory',
+              'calendar.mia': 'Mia',
+              'calendar.ivy': 'Ivy',
+              'calendar.family': 'House',
+              'calendar.birthdays': 'House',
+              'calendar.public_holidays': 'House'
+            } %}
+            {% set ns = namespace(rows=[]) %}
+            {% for cal, payload in week.items() %}
+              {% for e in payload.events %}
+                {% set allday = 'T' not in e.start %}
+                {% set ns.rows = ns.rows + [{
+                  'who': owner.get(cal, 'House'),
+                  'what': e.summary,
+                  'day': e.start[:10],
+                  'all_day': allday,
+                  'start': e.start,
+                  'at': '' if allday else as_local(as_datetime(e.start)).strftime('%H:%M')
+                }] %}
+              {% endfor %}
+            {% endfor %}
+            {{ ns.rows | sort(attribute='start') }}
+
+# ── School and club data the calendars cannot hold ─────────────────────────
+# www/family-extra.json, in the shape of www/family-extra.example.json: dated
+# items (kit, homework, term dates), standing kit, flags, schools and which
+# sources were checked. Write it however you like (by hand, a script, an
+# agent) and drop it in /config/www/. Read from disk rather than over HTTP: no
+# auth, no network, no surprise.
+#
+# The file carries its own checked_at and a per-source ok/unavailable split, so
+# the panel can say "couldn't check" instead of rendering a confident blank.
+# This sensor re-reads the file every 300s, so the SENSOR always looks alive
+# while the DATA ages: the dashboard reads checked_at, not the sensor's age.
+command_line:
+  - sensor:
+      name: Family Extra
+      unique_id: family_extra
+      command: "cat /config/www/family-extra.json"
+      value_template: "{{ value_json['items'] | count }}"
+      json_attributes:
+        - checked_at
+        - sources
+        - needs_human
+        - items
+        - kit
+        - flags
+        - schools
+      scan_interval: 300

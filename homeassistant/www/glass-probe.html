@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Glass probe</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;font-family:'Instrument Sans',Roboto,sans-serif;color:#E9EEF3}
+  body{background:#0B1018 url(/local/wallpaper.jpg?b=1) center/cover no-repeat}
+  #grid{position:absolute;inset:40px;display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(3,1fr);gap:24px}
+  #hud{position:absolute;left:40px;bottom:12px;font:700 26px/1 'Instrument Sans',sans-serif;color:#fff;text-shadow:0 2px 6px #000}
+  #dot{position:absolute;top:0;left:0;width:56px;height:56px;border-radius:50%;background:#E0A050;animation:sweep 2.4s linear infinite alternate}
+  @keyframes sweep{from{transform:translate(20px,120px)}to{transform:translate(1180px,680px)}}
+</style>
+</head>
+<body>
+<div id="dot"></div>
+<div id="grid"></div>
+<div id="hud">measuring…</div>
+<script>
+// Crestron TSW-1060 feasibility probe for the liquid-glass pass.
+// ?mode=blur  : cards use backdrop-filter (the real thing)
+// ?mode=flat  : same cards, translucent fill only, no backdrop-filter
+// A dot sweeps under the cards so the compositor has to re-blur every frame,
+// which is the worst case the dashboard could hit. The HUD prints frames per
+// second averaged over consecutive 3 s windows plus what the browser reports
+// for backdrop-filter support. Read it off a SCREENSHOT.
+(function () {
+  var mode = (location.search.match(/mode=(\w+)/) || [])[1] || "blur";
+  var r = (location.search.match(/r=(\d+)/) || [])[1] || "24";
+  var supports = (window.CSS && CSS.supports) ?
+    (CSS.supports("backdrop-filter", "blur(20px)") || CSS.supports("-webkit-backdrop-filter", "blur(20px)")) : "no CSS.supports";
+
+  // Cards live inside a shadow root, as Home Assistant's do.
+  var tpl = document.createElement("template");
+  tpl.innerHTML =
+    '<style>' +
+    ':host{display:block;position:relative;border-radius:24px;overflow:hidden;' +
+    ' background:linear-gradient(135deg,rgba(255,255,255,.14),rgba(255,255,255,.04)),rgba(18,26,38,.42);' +
+    ' border:1px solid rgba(255,255,255,.16);' +
+    ' box-shadow:inset 0 1px 0 rgba(255,255,255,.22),0 18px 60px rgba(0,0,0,.42);}' +
+    ':host([blur]){backdrop-filter:blur(' + r + 'px) saturate(140%);-webkit-backdrop-filter:blur(' + r + 'px) saturate(140%)}' +
+    '.t{position:absolute;left:22px;top:18px;font:600 28px/1.1 "Instrument Sans",sans-serif;color:#E9EEF3}' +
+    '.s{position:absolute;left:22px;top:58px;font:400 18px/1.3 "Instrument Sans",sans-serif;color:rgba(233,238,243,.72)}' +
+    '</style><div class="t"></div><div class="s"></div>';
+  function GlassCard() { return Reflect.construct(HTMLElement, [], GlassCard); }
+  GlassCard.prototype = Object.create(HTMLElement.prototype);
+  GlassCard.prototype.constructor = GlassCard;
+  GlassCard.prototype.connectedCallback = function () {
+    var r = this.attachShadow({ mode: "open" });
+    r.appendChild(tpl.content.cloneNode(true));
+    r.querySelector(".t").textContent = this.getAttribute("t");
+    r.querySelector(".s").textContent = this.getAttribute("s");
+  };
+  customElements.define("glass-card", GlassCard);
+
+  var names = ["Alex", "Jo", "Rory", "Mia", "Ivy", "House", "Tomorrow", "School", "Weather", "12:45", "Lights", "TV"];
+  var grid = document.getElementById("grid");
+  names.forEach(function (n, i) {
+    var c = document.createElement("glass-card");
+    c.setAttribute("t", n);
+    c.setAttribute("s", i % 3 ? "2 today · tap for the week" : "Clear");
+    if (mode === "blur") c.setAttribute("blur", "");
+    grid.appendChild(c);
+  });
+
+  var hud = document.getElementById("hud");
+  var frames = 0, t0 = performance.now(), windows = [];
+  function tick(t) {
+    frames++;
+    if (t - t0 >= 3000) {
+      windows.push(Math.round(frames * 1000 / (t - t0)));
+      frames = 0; t0 = t;
+      hud.textContent = "mode=" + mode + " r=" + r + "  supports=" + supports + "  fps: " + windows.join(" ") +
+        "  ua=" + (navigator.userAgent.match(/Chrome\/[\d.]+/) || ["?"])[0];
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>

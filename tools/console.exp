@@ -1,0 +1,31 @@
+#!/usr/bin/expect -f
+# Run console commands on the Crestron TSW-1060 over SSH and print the replies.
+# Usage: PANEL_HOST=... PANEL_USER=... PANEL_PASS=... ./console.exp "VER" "IPCONFIG"
+# Each argument is one command. No defaults: all three variables are required.
+foreach v {PANEL_HOST PANEL_USER PANEL_PASS} {
+  if {![info exists env($v)] || $env($v) eq ""} {
+    puts stderr "console.exp: set $v"
+    exit 2
+  }
+}
+set timeout 25
+log_user 0
+spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null $env(PANEL_USER)@$env(PANEL_HOST)
+expect {
+  -re "assword:" { send "$env(PANEL_PASS)\r" }
+  timeout { puts stderr "console.exp: no password prompt from $env(PANEL_HOST)"; exit 1 }
+}
+expect {
+  -re "TSW-1060>" {}
+  -re "assword:" { puts stderr "console.exp: login refused"; exit 1 }
+  timeout { puts stderr "console.exp: no console prompt"; exit 1 }
+}
+set cmds [lrange $argv 0 end]
+log_user 1
+foreach c $cmds {
+  send "$c\r"
+  expect -re "TSW-1060>"
+}
+log_user 0
+send "exit\r"
+expect eof

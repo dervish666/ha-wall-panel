@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Camera probe</title>
+<style>
+  html,body{margin:0;background:#0F141B;color:#E9EEF3;
+    font-family:Roboto,Helvetica,Arial,sans-serif;font-size:16px}
+  body{padding:24px}
+  pre{white-space:pre-wrap;word-break:break-word;color:#B8C4CE}
+  .ok{color:#7CD992}.bad{color:#E08080}
+</style>
+</head>
+<body>
+<h2>Camera probe</h2>
+<pre id="out">running&hellip;</pre>
+<video id="v" autoplay playsinline muted style="width:320px;display:none"></video>
+<script>
+// One-shot diagnostics for the TSW-1060 camera: does this browser engine
+// expose getUserMedia at all, can it enumerate devices, and can it open a
+// stream? Results render on screen for a panel screenshot. Delete after use.
+(function () {
+  var out = document.getElementById("out");
+  var lines = [];
+  function say(s, cls) {
+    lines.push(cls ? '<span class="' + cls + '">' + s + "</span>" : s);
+    out.innerHTML = lines.join("\n");
+  }
+  function done() { lines.push("done"); out.innerHTML = lines.join("\n"); }
+
+  var loc = window.location;
+  say("url: " + loc.href);
+  say("isSecureContext: " + window.isSecureContext,
+      window.isSecureContext ? "ok" : "bad");
+  say("UA: " + navigator.userAgent);
+
+  var md = navigator.mediaDevices;
+  if (!md) {
+    say("navigator.mediaDevices: ABSENT (no getUserMedia on this origin)",
+        "bad");
+    say("legacy navigator.getUserMedia: " + (navigator.getUserMedia ||
+        navigator.webkitGetUserMedia ? "present" : "absent"));
+    done();
+    return;
+  }
+  say("navigator.mediaDevices: present", "ok");
+
+  md.enumerateDevices().then(function (ds) {
+    if (!ds.length) { say("enumerateDevices: empty list", "bad"); }
+    ds.forEach(function (d) {
+      say("  " + d.kind + ": " + (d.label || "(no label until granted)") +
+          " id=" + (d.deviceId || "").slice(0, 8));
+    });
+    if (!ds.some(function (d) { return d.kind === "videoinput"; })) {
+      say("no videoinput reported", "bad");
+    }
+    return md.getUserMedia({ video: true, audio: false });
+  }).then(function (stream) {
+    var v = document.getElementById("v");
+    v.srcObject = stream;
+    v.style.display = "block";
+    var t = stream.getVideoTracks()[0];
+    say("getUserMedia: OK, track=" + (t ? t.label : "?"), "ok");
+    done();
+  }).catch(function (e) {
+    say("getUserMedia failed: " + e.name + ": " + e.message, "bad");
+    done();
+  });
+})();
+</script>
+</body>
+</html>

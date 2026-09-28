@@ -1,0 +1,108 @@
+# Theme for a wall panel (built on a Crestron TSW-1060): frosted glass over a
+# dark luminous wallpaper (www/wallpaper.jpg, drawn by tools/wallpaper.py).
+# Tuned for a 1280x800 screen read from across the room, and it hides the
+# Home Assistant header so the dashboard owns the whole panel. Only the
+# panel selects it.
+#
+# How the glass is built, given that card-mod on this panel only reaches the
+# ha-card surface (see the docs on card-mod):
+#   - fill, border, radius and shadow are ordinary ha-card theme variables;
+#   - card-mod-card adds the sheen gradient and the backdrop blur to every
+#     card, so a new card is glass without asking;
+#   - cards meant to sit flat on the wallpaper undo all of it with the `flat`
+#     anchor in dashboards/wall-panel.yaml.
+# Blur costs frames whenever something moves behind or with the cards: the
+# probe (www/glass-probe.html) measured 60 fps flat, 12 fps at blur(24px)
+# with twelve cards moving. Static content costs nothing, so the radius here
+# is a trade between depth on the wall and smoothness of the view swipes.
+Wall Panel:
+  # Ground
+  primary-background-color: "#0B1018"
+  secondary-background-color: "#10171F"
+  lovelace-background: 'center / cover no-repeat url("/local/wallpaper.jpg?v=2")'
+  app-header-background-color: "#0B1018"
+  sidebar-background-color: "#0B1018"
+
+  # Glass surfaces. Live blur is a native ha-card token (ha-card.ts reads
+  # --ha-card-backdrop-filter) and needs no card-mod, but on this panel any
+  # backdrop-filter at all, whatever the radius, drops moving content from
+  # 60 to ~10 fps (www/glass-probe.html, 2026-09-19). The wallpaper is
+  # already soft, so the frosted look comes from the fill, the sheen and the
+  # rim instead. To try the real thing: blur(14px) saturate(150%).
+  # The sheen rides in the same variable as the fill: ha-card sets
+  # `background: var(--ha-card-background)`, and a gradient over a colour is
+  # a valid shorthand. No card-mod in the path, which matters on this panel
+  # because card-mod has skipped a load before.
+  card-background-color: "rgba(18,26,38,.42)"
+  ha-card-background: "linear-gradient(135deg, rgba(255,255,255,.11) 0%, rgba(255,255,255,.035) 45%, rgba(255,255,255,0) 100%), rgba(18,26,38,.42)"
+  ha-card-backdrop-filter: "none"
+  ha-card-border-radius: "26px"
+  ha-card-border-width: "1px"
+  ha-card-border-color: "rgba(255,255,255,.14)"
+  ha-card-box-shadow: "inset 0 1px 0 rgba(255,255,255,.20), inset 0 -1px 0 rgba(0,0,0,.18), 0 24px 60px -24px rgba(0,0,0,.75)"
+
+  # Sections view: four columns at 1280 wide. Column count is
+  # floor((width - padding + gap) / (min-width + gap)), so 272 + 20 gives 4.
+  ha-view-sections-column-min-width: "272px"
+  ha-view-sections-column-gap: "20px"
+  ha-view-sections-row-gap: "16px"
+  ha-view-sections-column-max-width: "500px"
+
+  # Type
+  ha-font-family-body: "'Instrument Sans', -apple-system, BlinkMacSystemFont, sans-serif"
+  ha-font-family-heading: "'Instrument Sans', -apple-system, BlinkMacSystemFont, sans-serif"
+  primary-font-family: "'Instrument Sans', -apple-system, BlinkMacSystemFont, sans-serif"
+  paper-font-common-base_-_font-family: "'Instrument Sans', -apple-system, BlinkMacSystemFont, sans-serif"
+  paper-font-body1_-_font-family: "'Instrument Sans', -apple-system, BlinkMacSystemFont, sans-serif"
+  paper-font-headline_-_font-family: "'Instrument Sans', -apple-system, BlinkMacSystemFont, sans-serif"
+  paper-font-title_-_font-family: "'Instrument Sans', -apple-system, BlinkMacSystemFont, sans-serif"
+  ha-card-header-font-family: "'Instrument Sans', -apple-system, BlinkMacSystemFont, sans-serif"
+  ha-card-header-font-size: "27px"
+  primary-text-color: "#F2F5F8"
+  secondary-text-color: "rgba(233,238,243,.64)"
+  text-primary-color: "#F2F5F8"
+  disabled-text-color: "#5C6774"
+  app-header-text-color: "#F2F5F8"
+
+  # One accent, everywhere
+  primary-color: "#E0A050"
+  accent-color: "#E0A050"
+  state-icon-color: "#8D9BAA"
+  paper-item-icon-color: "#8D9BAA"
+  paper-item-icon-active-color: "#E0A050"
+  state-light-active-color: "#E0A050"
+  state-switch-active-color: "#E0A050"
+  state-media_player-active-color: "#E0A050"
+  switch-checked-color: "#E0A050"
+  slider-color: "#E0A050"
+  slider-track-color: "rgba(255,255,255,.12)"
+  divider-color: "rgba(255,255,255,.10)"
+
+  # Mushroom
+  mush-border-radius: "26px"
+  mush-icon-border-radius: "16px"
+  mush-icon-size: "52px"
+  mush-control-height: "50px"
+  mush-control-border-radius: "16px"
+  mush-card-primary-font-family: "'Instrument Sans', -apple-system, BlinkMacSystemFont, sans-serif"
+  mush-card-secondary-font-family: "'Instrument Sans', -apple-system, BlinkMacSystemFont, sans-serif"
+  mush-card-primary-font-size: "19px"
+  mush-card-secondary-font-size: "14px"
+  mush-card-primary-font-weight: 600
+  mush-title-font-family: "'Instrument Sans', -apple-system, BlinkMacSystemFont, sans-serif"
+  mush-title-font-size: "16px"
+  mush-title-font-weight: 600
+  mush-subtitle-font-size: "13px"
+  mush-rgb-primary: "224, 160, 80"
+  mush-rgb-state-light: "224, 160, 80"
+  mush-rgb-state-switch: "224, 160, 80"
+  mush-rgb-state-media-player: "224, 160, 80"
+  mush-rgb-warning: "224, 160, 80"
+  mush-spacing: "14px"
+
+  # Kiosk: the header goes, the view takes the whole 800px. This is the only
+  # card-mod left in the theme.
+  card-mod-theme: Wall Panel
+  card-mod-root: |
+    .header { display: none !important; }
+    #view { padding-top: 0 !important; margin-top: 0 !important; min-height: 100vh !important; }

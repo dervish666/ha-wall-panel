@@ -1,0 +1,29 @@
+# Merge into scripts.yaml. Replace SERIAL with your printer's serial as it
+# appears in its entity ids (ha-bambulab integration).
+printer_pause_resume:
+  alias: 'Printer: pause or resume'
+  description: 'One entry point for the wall panel''s single pause/resume tile.
+    A Lovelace tap_action cannot branch and cannot template its target, so the branch
+    lives here: running presses pause, paused presses resume, anything else does nothing.
+    Two conditional cards would work too but hidden conditionals still reserve their
+    grid rows in a sections view, which is what pushed the chamber light off the bottom
+    of the panel.'
+  mode: single
+  sequence:
+  - choose:
+    - conditions:
+      - condition: state
+        entity_id: sensor.a1mini_SERIAL_print_status
+        state: running
+      sequence:
+      - action: button.press
+        target:
+          entity_id: button.a1mini_SERIAL_pause
+    - conditions:
+      - condition: state
+        entity_id: sensor.a1mini_SERIAL_print_status
+        state: pause
+      sequence:
+      - action: button.press
+        target:
+          entity_id: button.a1mini_SERIAL_resume

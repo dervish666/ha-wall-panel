@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Panel</title>
+<style>
+  html,body{margin:0;height:100%;background:#0F141B;color:#8E9CAA;
+    font-family:-apple-system,Roboto,Helvetica,Arial,sans-serif}
+  #m{display:flex;height:100%;flex-direction:column;align-items:center;justify-content:center;
+    text-align:center;font-size:20px;gap:10px}
+  #s{font-size:14px;color:#5C6774}
+</style>
+</head>
+<body>
+<div id="m"><div>Opening the dashboard</div><div id="s"></div></div>
+<script>
+// Crestron TSW-1060 user project. The panel boots into this, and this page
+// has one job: ask Home Assistant to open the panel's real browser on the
+// dashboard. It cannot open the browser itself, and it cannot host Home
+// Assistant either, because this webview has no localStorage.
+//
+// Home Assistant answers the webhook by running BROWSEROPEN over SSH.
+// When the browser closes (the power key does that) this page is visible
+// again, so it asks again. Tapping the screen asks again too.
+(function () {
+  // ── EDIT ME ── your Home Assistant address. Use the plain http:// LAN
+  // address, not a hostname the panel may not resolve. The webhook id must
+  // match automations.example.yaml.
+  var HA_URL = "http://HOME_ASSISTANT_IP:8123";
+  var HOOK = HA_URL + "/api/webhook/crestron-open-browser";
+  var status = document.getElementById("s");
+  var attempt = 0, timer = null;
+
+  function say(t) { status.textContent = t; }
+
+  function fire() {
+    attempt += 1;
+    say(attempt > 1 ? "asking again (" + attempt + ")" : "");
+    fetch(HOOK, { method: "POST", mode: "no-cors", cache: "no-store" })
+      .then(function () { schedule(6000); })
+      .catch(function (e) { say("Home Assistant not reachable: " + e.message); schedule(4000); });
+  }
+
+  // Keep asking until the browser is on top of us, then stop.
+  function schedule(ms) {
+    clearTimeout(timer);
+    if (document.hidden) { attempt = 0; return; }
+    timer = setTimeout(fire, ms);
+  }
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) { clearTimeout(timer); attempt = 0; return; }
+    fire();
+  });
+  document.addEventListener("click", function () { fire(); });
+
+  fire();
+})();
+</script>
+</body>
+</html>

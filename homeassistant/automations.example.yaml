@@ -1,0 +1,16 @@
+# Append to automations.yaml. Crestron only: the webhook id must match HOOK in
+# crestron/launcher/index.html. While you drive the panel's browser by hand
+# over SSH, disable this, or the launcher reopens the kiosk under you.
+- id: crestron_open_browser
+  alias: 'Crestron panel: open the browser'
+  description: The panel's user project posts this webhook when it boots or regains the screen. Answer by launching the panel's standalone browser on the dashboard.
+  triggers:
+  - trigger: webhook
+    webhook_id: crestron-open-browser
+    allowed_methods:
+    - POST
+    local_only: true
+  conditions: []
+  actions:
+  - action: shell_command.crestron_browser_open
+  mode: single

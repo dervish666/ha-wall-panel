@@ -1,0 +1,1792 @@
+# Wall panel dashboard. Built on a Crestron TSW-1060 in a living room:
+# 1280x800, always dark, never scrolls. Frosted glass over a wallpaper: the
+# theme (themes/wall-panel.yaml) makes every ha-card glass, so a card here is
+# glass unless it says otherwise.
+#
+# Register it in configuration.yaml as the `wall-panel` dashboard (see
+# configuration.example.yaml). It needs HACS: Mushroom and card-mod.
+#
+# Views, in side-key order: meadow (the family, landing view), today (the
+# family agenda), home (the room), lights, printer. Then the subviews: two
+# example person pages (person-alex, person-mia) and three detail pages
+# (detail-coming-up, detail-tomorrow, detail-school), all reached by tapping
+# a panel on Today.
+#
+# Every entity id below is a placeholder. Search for light., sensor., switch.,
+# media_player. and a1mini_SERIAL and swap in your own. The people are Alex,
+# Jo, Rory, Mia, Ivy and House: the names come from the calendar owner map in
+# configuration.example.yaml, so change both together.
+#
+# Traps, all learned the hard way on this panel:
+#
+# 1. Card content uses a LITERAL block scalar (|-), never folded (>-). A
+#    folded scalar joins lines with spaces and silently collapses a list.
+# 2. card_mod reaches the ha-card and ha-markdown ELEMENTS but cannot cross
+#    into their shadow roots, so `ha-markdown h2`, `ul`, `li` and
+#    `.card-header` are all dead. Only inherited properties and CSS custom
+#    properties (--ha-card-header-font-size, --ha-card-header-color,
+#    --card-primary-font-size, --ha-font-weight-normal) get through.
+# 3. Line breaks inside a markdown card are explicit `<br>` tags joined in
+#    Jinja, not list items: bullets read as a document, not a display.
+# 4. Every panel has a fixed height and overflow hidden, and every
+#    list is capped, because the view must never grow past 800px: a taller
+#    column scrolls, and a wall panel with a scrollbar is a bug.
+title: Wall Panel
+views:
+
+  # ── Meadow: the family as creatures in a little village ───────────────
+  # www/meadow.html in an iframe, full screen. The page reads sensor.family_week
+  # and sensor.family_extra itself with this browser's HA token, and hands the
+  # side keys up to crestron-keys.js so up/down still pan. Bump ?v= on every
+  # push: /local/ is cached for a month (the docs cover this cache trap).
+  - title: Meadow
+    path: meadow
+    type: panel
+    theme: Wall Panel
+    cards:
+      - type: iframe
+        url: /local/meadow.html?v=9
+        card_mod:
+          style: |
+            ha-card {
+              border: none !important;
+              border-radius: 0 !important;
+              background: none !important;
+              box-shadow: none !important;
+              overflow: hidden;
+            }
+
+  # ── Today: the whole family's day ─────────────────────────────────────
+  # Four columns: the ambient column (clock, sky, what is next), the adults,
+  # the kids, the house. Fed by sensor.family_today and sensor.family_week
+  # (configuration.example.yaml). Tapping a person's panel opens their
+  # subview; only Alex and Mia have one here, the rest say how to add theirs.
+  - title: Today
+    path: today
+    type: sections
+    max_columns: 4
+    theme: Wall Panel
+    sections:
+
+      # ── Ambient ──────────────────────────────────────────────────────
+      # Heights come from grid rows (56px each, 8px gaps): 4+4+3+1 rows and
+      # three gaps make 760px, the same as the other columns.
+      - type: grid
+        cards:
+          - type: custom:mushroom-legacy-template-card
+            primary: "{{ now().strftime('%H:%M') }}"
+            secondary: "{{ now().strftime('%A %-d %B') }}"
+            icon: ""
+            tap_action: { action: none }
+            card_mod:
+              style: |
+                ha-card {
+                  background: none !important;
+                  border: none !important;
+                  box-shadow: none !important;
+                  backdrop-filter: none !important;
+                  -webkit-backdrop-filter: none !important;
+                  padding: 8px 6px 0 6px;
+                  --card-primary-font-size: 92px;
+                  --card-primary-font-weight: 600;
+                  --card-primary-line-height: 1;
+                  --card-primary-letter-spacing: -0.03em;
+                  --card-secondary-font-size: 22px;
+                  --card-secondary-font-weight: 500;
+                  --card-secondary-line-height: 1.4;
+                }
+            grid_options: { columns: 12, rows: 4 }
+
+          - type: weather-forecast
+            entity: weather.forecast_home
+            forecast_type: daily
+            show_current: true
+            show_forecast: true
+            name: " "
+            card_mod:
+              style: |
+                ha-card { padding: 10px 14px 8px 14px; overflow: hidden; }
+                .content { --mdc-icon-size: 56px; }
+            grid_options: { columns: 12, rows: 4 }
+
+          # The next three timed events across the family, today first and
+          # then tomorrow, so the panel still says something in the evening.
+          - type: markdown
+            title: Coming up
+            tap_action: { action: navigate, navigation_path: /wall-panel/detail-coming-up }
+            content: |-
+              {%- set today = state_attr('sensor.family_today','events') or [] -%}
+              {%- set week = state_attr('sensor.family_week','events') or [] -%}
+              {%- set ts = state_attr('sensor.family_today','checked_at') -%}
+              {%- set hm = now().strftime('%H:%M') -%}
+              {%- set d1 = (now() + timedelta(days=1)).strftime('%Y-%m-%d') -%}
+              {%- set later = today | rejectattr('all_day') | selectattr('at','gt',hm) | list -%}
+              {%- set tmrw = week | selectattr('day','eq',d1) | rejectattr('all_day') | list -%}
+              {%- set ns = namespace(l=[]) -%}
+              {%- for e in later[:3] -%}
+              {%- set ns.l = ns.l + ['**' ~ e.at ~ '** ' ~ e.what ~ ' · ' ~ e.who] -%}
+              {%- endfor -%}
+              {%- for e in tmrw[:(3 - (ns.l | count))] -%}
+              {%- set ns.l = ns.l + ['**Tomorrow ' ~ e.at ~ '** ' ~ e.what ~ ' · ' ~ e.who] -%}
+              {%- endfor -%}
+              {%- if ts is none -%}
+              {%- set ns.l = ['*The calendar feed has not reported yet*'] -%}
+              {%- elif ((now() - as_datetime(ts)).total_seconds() / 60) | round > 20 -%}
+              {%- set ns.l = ns.l + ['*Feed stale since ' ~ as_local(as_datetime(ts)).strftime('%H:%M') ~ '*'] -%}
+              {%- endif -%}
+              {{ ns.l | join('<br>') if ns.l else '*Nothing timed today or tomorrow*' }}
+            card_mod:
+              style: |
+                ha-card { overflow: hidden; --ha-font-weight-normal: 600; }
+                ha-markdown { font-size: 20px; line-height: 1.4; font-weight: 400; }
+            grid_options: { columns: 12, rows: 3 }
+
+          - type: custom:mushroom-legacy-template-card
+            primary: >-
+              {{ states('sensor.kitchen_temperature') | float(0) | round(1) }}° kitchen ·
+              {{ states('sensor.upstairs_temperature') | float(0) | round(1) }}° upstairs
+            icon: ""
+            tap_action: { action: none }
+            card_mod:
+              style: |
+                ha-card {
+                  background: none !important;
+                  border: none !important;
+                  box-shadow: none !important;
+                  backdrop-filter: none !important;
+                  -webkit-backdrop-filter: none !important;
+                  padding: 0 6px;
+                  --card-primary-font-size: 16px;
+                  --card-primary-font-weight: 500;
+                  --card-primary-color: rgba(233,238,243,.64);
+                }
+            grid_options: { columns: 12, rows: 1 }
+
+      # ── The adults ───────────────────────────────────────────────────
+      # Two panels a column, 6 grid rows (376px) each: 760px, like every column.
+      - type: grid
+        cards:
+          - type: markdown
+            title: Alex
+            tap_action: { action: navigate, navigation_path: /wall-panel/person-alex }
+            content: |-
+              {%- set rows = state_attr('sensor.family_today','events') or [] -%}
+              {%- set mine = rows | selectattr('who','eq','Alex') | list -%}
+              {%- set ns = namespace(l=[]) -%}
+              {%- for e in mine[:9] -%}
+              {%- set ns.l = ns.l + ['**' ~ ('All day' if e.all_day else e.at) ~ '** ' ~ e.what] -%}
+              {%- endfor -%}
+              {%- if mine | count > 9 -%}{%- set ns.l = ns.l + ['*+' ~ (mine | count - 9) ~ ' more*'] -%}{%- endif -%}
+              {%- if not ns.l -%}
+              {%- set today = now().strftime('%Y-%m-%d') -%}
+              {%- set d1 = (now() + timedelta(days=1)).strftime('%Y-%m-%d') -%}
+              {%- set wk = (state_attr('sensor.family_week','events') or []) | selectattr('who','eq','Alex') | rejectattr('day','eq',today) | list -%}
+              {%- if wk -%}
+              {%- set e = wk[0] -%}
+              {%- set ns.l = ['*Nothing on today*', '', '**Next** ' ~ ('Tomorrow' if e.day == d1 else as_local(as_datetime(e.day)).strftime('%A')) ~ ('' if e.all_day else ' ' ~ e.at), e.what] -%}
+              {%- else -%}
+              {%- set ns.l = ['*Nothing on this week*'] -%}
+              {%- endif -%}
+              {%- endif -%}
+              {{ ns.l | join('<br>') }}
+            card_mod:
+              style: |
+                ha-card {
+                  overflow: hidden;
+                  --ha-card-header-color: #7FC8D2;
+                  --ha-font-weight-normal: 600;
+                }
+                ha-markdown { font-size: 20px; line-height: 1.4; font-weight: 400; }
+            grid_options: { columns: 12, rows: 6 }
+
+          - type: markdown
+            title: Jo
+            # No example subview for this one. Copy person-mia, rename it person-jo,
+            # then make this a navigate to /wall-panel/person-jo.
+            tap_action: { action: none }
+            content: |-
+              {%- set rows = state_attr('sensor.family_today','events') or [] -%}
+              {%- set mine = rows | selectattr('who','eq','Jo') | list -%}
+              {%- set ns = namespace(l=[]) -%}
+              {%- for e in mine[:9] -%}
+              {%- set ns.l = ns.l + ['**' ~ ('All day' if e.all_day else e.at) ~ '** ' ~ e.what] -%}
+              {%- endfor -%}
+              {%- if mine | count > 9 -%}{%- set ns.l = ns.l + ['*+' ~ (mine | count - 9) ~ ' more*'] -%}{%- endif -%}
+              {%- if not ns.l -%}
+              {%- set today = now().strftime('%Y-%m-%d') -%}
+              {%- set d1 = (now() + timedelta(days=1)).strftime('%Y-%m-%d') -%}
+              {%- set wk = (state_attr('sensor.family_week','events') or []) | selectattr('who','eq','Jo') | rejectattr('day','eq',today) | list -%}
+              {%- if wk -%}
+              {%- set e = wk[0] -%}
+              {%- set ns.l = ['*Nothing on today*', '', '**Next** ' ~ ('Tomorrow' if e.day == d1 else as_local(as_datetime(e.day)).strftime('%A')) ~ ('' if e.all_day else ' ' ~ e.at), e.what] -%}
+              {%- else -%}
+              {%- set ns.l = ['*Nothing on this week*'] -%}
+              {%- endif -%}
+              {%- endif -%}
+              {{ ns.l | join('<br>') }}
+            card_mod:
+              style: |
+                ha-card {
+                  overflow: hidden;
+                  --ha-card-header-color: #9A72C8;
+                  --ha-font-weight-normal: 600;
+                }
+                ha-markdown { font-size: 20px; line-height: 1.4; font-weight: 400; }
+            grid_options: { columns: 12, rows: 6 }
+
+      # ── The kids ─────────────────────────────────────────────────────
+      # Three panels a column, 4 grid rows (248px) each.
+      - type: grid
+        cards:
+          - type: markdown
+            title: Rory
+            # No example subview for this one. Copy person-mia, rename it person-rory,
+            # then make this a navigate to /wall-panel/person-rory.
+            tap_action: { action: none }
+            content: |-
+              {%- set rows = state_attr('sensor.family_today','events') or [] -%}
+              {%- set mine = rows | selectattr('who','eq','Rory') | list -%}
+              {%- set ns = namespace(l=[]) -%}
+              {%- for e in mine[:5] -%}
+              {%- set ns.l = ns.l + ['**' ~ ('All day' if e.all_day else e.at) ~ '** ' ~ e.what] -%}
+              {%- endfor -%}
+              {%- if mine | count > 5 -%}{%- set ns.l = ns.l + ['*+' ~ (mine | count - 5) ~ ' more*'] -%}{%- endif -%}
+              {%- if not ns.l -%}
+              {%- set today = now().strftime('%Y-%m-%d') -%}
+              {%- set d1 = (now() + timedelta(days=1)).strftime('%Y-%m-%d') -%}
+              {%- set wk = (state_attr('sensor.family_week','events') or []) | selectattr('who','eq','Rory') | rejectattr('day','eq',today) | list -%}
+              {%- if wk -%}
+              {%- set e = wk[0] -%}
+              {%- set ns.l = ['*Nothing on today*', '', '**Next** ' ~ ('Tomorrow' if e.day == d1 else as_local(as_datetime(e.day)).strftime('%A')) ~ ('' if e.all_day else ' ' ~ e.at), e.what] -%}
+              {%- else -%}
+              {%- set ns.l = ['*Nothing on this week*'] -%}
+              {%- endif -%}
+              {%- endif -%}
+              {{ ns.l | join('<br>') }}
+            card_mod:
+              style: |
+                ha-card {
+                  overflow: hidden;
+                  --ha-card-header-color: #A3B0F2;
+                  --ha-font-weight-normal: 600;
+                }
+                ha-markdown { font-size: 20px; line-height: 1.4; font-weight: 400; }
+            grid_options: { columns: 12, rows: 4 }
+
+          - type: markdown
+            title: Mia
+            tap_action: { action: navigate, navigation_path: /wall-panel/person-mia }
+            content: |-
+              {%- set rows = state_attr('sensor.family_today','events') or [] -%}
+              {%- set mine = rows | selectattr('who','eq','Mia') | list -%}
+              {%- set ns = namespace(l=[]) -%}
+              {%- for e in mine[:5] -%}
+              {%- set ns.l = ns.l + ['**' ~ ('All day' if e.all_day else e.at) ~ '** ' ~ e.what] -%}
+              {%- endfor -%}
+              {%- if mine | count > 5 -%}{%- set ns.l = ns.l + ['*+' ~ (mine | count - 5) ~ ' more*'] -%}{%- endif -%}
+              {%- if not ns.l -%}
+              {%- set today = now().strftime('%Y-%m-%d') -%}
+              {%- set d1 = (now() + timedelta(days=1)).strftime('%Y-%m-%d') -%}
+              {%- set wk = (state_attr('sensor.family_week','events') or []) | selectattr('who','eq','Mia') | rejectattr('day','eq',today) | list -%}
+              {%- if wk -%}
+              {%- set e = wk[0] -%}
+              {%- set ns.l = ['*Nothing on today*', '', '**Next** ' ~ ('Tomorrow' if e.day == d1 else as_local(as_datetime(e.day)).strftime('%A')) ~ ('' if e.all_day else ' ' ~ e.at), e.what] -%}
+              {%- else -%}
+              {%- set ns.l = ['*Nothing on this week*'] -%}
+              {%- endif -%}
+              {%- endif -%}
+              {{ ns.l | join('<br>') }}
+            card_mod:
+              style: |
+                ha-card {
+                  overflow: hidden;
+                  --ha-card-header-color: #D4A8F5;
+                  --ha-font-weight-normal: 600;
+                }
+                ha-markdown { font-size: 20px; line-height: 1.4; font-weight: 400; }
+            grid_options: { columns: 12, rows: 4 }
+
+          - type: markdown
+            title: Ivy
+            # No example subview for this one. Copy person-mia, rename it person-ivy,
+            # then make this a navigate to /wall-panel/person-ivy.
+            tap_action: { action: none }
+            content: |-
+              {%- set rows = state_attr('sensor.family_today','events') or [] -%}
+              {%- set mine = rows | selectattr('who','eq','Ivy') | list -%}
+              {%- set ns = namespace(l=[]) -%}
+              {%- for e in mine[:5] -%}
+              {%- set ns.l = ns.l + ['**' ~ ('All day' if e.all_day else e.at) ~ '** ' ~ e.what] -%}
+              {%- endfor -%}
+              {%- if mine | count > 5 -%}{%- set ns.l = ns.l + ['*+' ~ (mine | count - 5) ~ ' more*'] -%}{%- endif -%}
+              {%- if not ns.l -%}
+              {%- set today = now().strftime('%Y-%m-%d') -%}
+              {%- set d1 = (now() + timedelta(days=1)).strftime('%Y-%m-%d') -%}
+              {%- set wk = (state_attr('sensor.family_week','events') or []) | selectattr('who','eq','Ivy') | rejectattr('day','eq',today) | list -%}
+              {%- if wk -%}
+              {%- set e = wk[0] -%}
+              {%- set ns.l = ['*Nothing on today*', '', '**Next** ' ~ ('Tomorrow' if e.day == d1 else as_local(as_datetime(e.day)).strftime('%A')) ~ ('' if e.all_day else ' ' ~ e.at), e.what] -%}
+              {%- else -%}
+              {%- set ns.l = ['*Nothing on this week*'] -%}
+              {%- endif -%}
+              {%- endif -%}
+              {{ ns.l | join('<br>') }}
+            card_mod:
+              style: |
+                ha-card {
+                  overflow: hidden;
+                  --ha-card-header-color: #9EE0B4;
+                  --ha-font-weight-normal: 600;
+                }
+                ha-markdown { font-size: 20px; line-height: 1.4; font-weight: 400; }
+            grid_options: { columns: 12, rows: 4 }
+
+      # ── The house ────────────────────────────────────────────────────
+      - type: grid
+        cards:
+          - type: markdown
+            title: House
+            # No example subview for this one. Copy person-mia, rename it person-house,
+            # then make this a navigate to /wall-panel/person-house.
+            tap_action: { action: none }
+            content: |-
+              {%- set rows = state_attr('sensor.family_today','events') or [] -%}
+              {%- set mine = rows | selectattr('who','eq','House') | list -%}
+              {%- set ns = namespace(l=[]) -%}
+              {%- for e in mine[:5] -%}
+              {%- set ns.l = ns.l + ['**' ~ ('All day' if e.all_day else e.at) ~ '** ' ~ e.what] -%}
+              {%- endfor -%}
+              {%- if mine | count > 5 -%}{%- set ns.l = ns.l + ['*+' ~ (mine | count - 5) ~ ' more*'] -%}{%- endif -%}
+              {%- if not ns.l -%}
+              {%- set today = now().strftime('%Y-%m-%d') -%}
+              {%- set d1 = (now() + timedelta(days=1)).strftime('%Y-%m-%d') -%}
+              {%- set wk = (state_attr('sensor.family_week','events') or []) | selectattr('who','eq','House') | rejectattr('day','eq',today) | list -%}
+              {%- if wk -%}
+              {%- set e = wk[0] -%}
+              {%- set ns.l = ['*Nothing on today*', '', '**Next** ' ~ ('Tomorrow' if e.day == d1 else as_local(as_datetime(e.day)).strftime('%A')) ~ ('' if e.all_day else ' ' ~ e.at), e.what] -%}
+              {%- else -%}
+              {%- set ns.l = ['*Nothing on this week*'] -%}
+              {%- endif -%}
+              {%- endif -%}
+              {{ ns.l | join('<br>') }}
+            card_mod:
+              style: |
+                ha-card {
+                  overflow: hidden;
+                  --ha-card-header-color: #E0A050;
+                  --ha-font-weight-normal: 600;
+                }
+                ha-markdown { font-size: 20px; line-height: 1.4; font-weight: 400; }
+            grid_options: { columns: 12, rows: 3 }
+
+          - type: markdown
+            title: Tomorrow
+            tap_action: { action: navigate, navigation_path: /wall-panel/detail-tomorrow }
+            content: |-
+              {%- set rows = state_attr('sensor.family_week','events') or [] -%}
+              {%- set d = (now() + timedelta(days=1)).strftime('%Y-%m-%d') -%}
+              {%- set mine = rows | selectattr('day','eq',d) | list -%}
+              {%- set ns = namespace(l=[]) -%}
+              {%- for e in mine[:5] -%}
+              {%- set ns.l = ns.l + ['**' ~ ('All day' if e.all_day else e.at) ~ '** ' ~ e.who ~ ' · ' ~ e.what] -%}
+              {%- endfor -%}
+              {%- if mine | count > 5 -%}{%- set ns.l = ns.l + ['*+' ~ (mine | count - 5) ~ ' more*'] -%}{%- endif -%}
+              {{ ns.l | join('<br>') if ns.l else '*Nothing on*' }}
+            card_mod:
+              style: |
+                ha-card {
+                  overflow: hidden;
+                  --ha-font-weight-normal: 600;
+                }
+                ha-markdown { font-size: 20px; line-height: 1.4; font-weight: 400; }
+            grid_options: { columns: 12, rows: 4 }
+
+          # Kit reminders first (they are about tonight), then the next few
+          # school dates from family-extra.json, then its flags, then anything
+          # it could not check. Five entries fit the panel even when they wrap.
+          # Kit comes from family-extra.json items with kind "kit"; if you have
+          # a timetable sensor that knows PE days, this is where it goes.
+          - type: markdown
+            title: School
+            tap_action: { action: navigate, navigation_path: /wall-panel/detail-school }
+            content: |-
+              {%- set ex = state_attr('sensor.family_extra','items') or [] -%}
+              {%- set today = now().strftime('%Y-%m-%d') -%}
+              {%- set soon = ex | selectattr('date','ge',today) | list -%}
+              {%- set flags = state_attr('sensor.family_extra','flags') or [] -%}
+              {%- set gone = (state_attr('sensor.family_extra','sources') or {}).get('unavailable') or [] -%}
+              {%- set ns = namespace(l=[]) -%}
+              {%- set d1 = (now() + timedelta(days=1)).strftime('%Y-%m-%d') -%}
+              {%- for k in ex | selectattr('kind','eq','kit') | selectattr('date','eq',d1) -%}
+              {%- set ns.l = ns.l + ['**' ~ k.what ~ ' tomorrow** · ' ~ k.who] -%}
+              {%- endfor -%}
+              {%- for k in ex | selectattr('kind','eq','kit') | selectattr('date','eq',today) -%}
+              {%- set ns.l = ns.l + ['**' ~ k.what ~ ' today** · ' ~ k.who] -%}
+              {%- endfor -%}
+              {%- set soon = soon | rejectattr('kind','eq','kit') | list -%}
+              {%- for i in soon[:3] -%}
+              {%- set ns.l = ns.l + ['**' ~ as_local(as_datetime(i.date)).strftime('%a %-d %b') ~ '** ' ~ i.who ~ ' · ' ~ i.what] -%}
+              {%- endfor -%}
+              {#- THE CAP ONLY EVER APPLIES TO ITEMS. Everything below it is a
+                  warning, and a warning a cap can truncate is worse than none:
+                  the card looks calmest exactly when it has most to hide. That
+                  is not hypothetical: "Could not check pdf-attachments,
+                  second-mailbox, school-email" was the sixth line of five and
+                  was being silently dropped, on the one card whose whole job is
+                  to say what it could not see. -#}
+              {#- Budget RENDERED lines, not list entries. This column is ~272px
+                  wide, so "Mon 21 Sep Mia · New maths homework due. Last one was not
+                  started." is three lines on the panel, not one. Counting entries
+                  produced a card that clipped both warnings below the fold while
+                  the arithmetic said it fitted, caught only by a screenshot.
+                  ~26 visible characters a line at 18px; markdown and entities do
+                  not render, so strip them before measuring.
+                  Warnings are load-bearing and always included; items take what is
+                  left. A namespace throughout, because `set` inside a for loop does
+                  not survive the loop in Jinja. -#}
+              {%- set CPL = 26 -%}
+              {%- macro plain(t) -%}{{ t | replace('**','') | replace('*','') | replace('&nbsp;',' ') | replace('&middot;','·') | replace('&mdash;','—') }}{%- endmacro -%}
+              {%- set w = namespace(l=[], h=0) -%}
+              {%- for f in flags -%}{%- set w.l = w.l + ['⚠ ' ~ f] -%}{%- endfor -%}
+              {%- if gone -%}{%- set w.l = w.l + ['*Unchecked: ' ~ (gone | map('replace','-attachments','s') | map('replace','-',' ') | join(', ')) ~ '*'] -%}{%- endif -%}
+              {#- sensor.family_extra is a command_line sensor re-reading the JSON
+                  every 300s, so the SENSOR always looks alive while the DATA ages.
+                  Nothing writes that file but whatever gather job you run yourself. -#}
+              {%- set ts = state_attr('sensor.family_extra','checked_at') -%}
+              {%- set age = ((now() - as_datetime(ts)).total_seconds() / 86400) | round(0) | int if ts else none -%}
+              {%- if age is none -%}{%- set w.l = w.l + ['⚠ *Never gathered*'] -%}
+              {%- elif age >= 7 -%}{%- set w.l = w.l + ['⚠ *' ~ age ~ ' days since a gather*'] -%}
+              {%- elif age >= 3 -%}{%- set w.l = w.l + ['*Gathered ' ~ age ~ 'd ago*'] -%}
+              {%- endif -%}
+              {%- for x in w.l -%}{%- set w.h = w.h + ([1, (plain(x) | trim | length / CPL) | round(0, 'ceil') | int] | max) -%}{%- endfor -%}
+              {%- set b = namespace(l=[], h=w.h) -%}
+              {%- for x in ns.l -%}
+              {%- set cost = [1, (plain(x) | trim | length / CPL) | round(0, 'ceil') | int] | max -%}
+              {%- if b.h + cost <= 10 -%}{%- set b.l = b.l + [x] -%}{%- set b.h = b.h + cost -%}{%- endif -%}
+              {%- endfor -%}
+              {%- if ns.l | count > b.l | count -%}{%- set b.l = b.l + ['*+' ~ (ns.l | count - b.l | count) ~ ' more*'] -%}{%- endif -%}
+              {{ (b.l + w.l) | join('<br>') if (b.l + w.l) else '*Nothing booked*' }}
+            card_mod:
+              style: |
+                ha-card {
+                  overflow: hidden;
+                  --ha-font-weight-normal: 600;
+                }
+                ha-markdown { font-size: 18px; line-height: 1.33; font-weight: 400; }
+            grid_options: { columns: 12, rows: 5 }
+
+  # ── Home: the room the panel lives in ─────────────────────────────────
+  - title: Home
+    path: home
+    type: sections
+    max_columns: 3
+    theme: Wall Panel
+    sections:
+
+      # ── Left: now ────────────────────────────────────────────────────────
+      - type: grid
+        cards:
+          - type: clock
+            clock_size: large
+            show_seconds: false
+            time_format: "24"
+            grid_options: { columns: 12, rows: auto }
+
+          - type: custom:mushroom-legacy-template-card
+            primary: "{{ now().strftime('%A %-d %B') }}"
+            icon: ""
+            tap_action: { action: none }
+            # `flat` undoes the theme's glass: no fill, border, shadow or blur.
+            card_mod: &flat
+              style: |
+                ha-card {
+                  background: none !important;
+                  border: none !important;
+                  box-shadow: none !important;
+                  backdrop-filter: none !important;
+                  -webkit-backdrop-filter: none !important;
+                }
+            grid_options: { columns: 12, rows: auto }
+
+          - type: weather-forecast
+            entity: weather.forecast_home
+            forecast_type: daily
+            show_current: true
+            show_forecast: true
+            name: " "
+            card_mod:
+              style: |
+                ha-card { padding: 14px 18px; }
+                .content { --mdc-icon-size: 56px; }
+            grid_options: { columns: 12, rows: 4 }
+
+          - type: entity
+            entity: sensor.kitchen_temperature
+            name: Kitchen
+            icon: mdi:thermometer
+            card_mod:
+              style: |
+                ha-card { padding: 12px 16px 10px 16px; }
+            grid_options: { columns: 6, rows: auto }
+
+          - type: entity
+            entity: sensor.upstairs_temperature
+            name: Upstairs
+            icon: mdi:thermometer
+            card_mod:
+              style: |
+                ha-card { padding: 12px 16px 10px 16px; }
+            grid_options: { columns: 6, rows: auto }
+
+          # Yesterday's cost and usage from your energy supplier's integration.
+          # Any sensor pair with a cost and a kWh reading will do; rename to suit.
+          - type: custom:mushroom-template-card
+            entity: sensor.energy_last_electricity_cost
+            primary: "£{{ '%.2f' | format(states('sensor.energy_last_electricity_cost') | float(0)) }}"
+            secondary: "Electricity yesterday, {{ states('sensor.energy_last_electricity_reading') | float(0) | round(1) }} kWh"
+            icon: mdi:flash-outline
+            icon_color: "#8D9BAA"
+            tap_action: { action: more-info }
+            grid_options: { columns: 12, rows: auto }
+
+          - type: custom:mushroom-template-card
+            entity: sensor.energy_last_gas_cost
+            primary: "£{{ '%.2f' | format(states('sensor.energy_last_gas_cost') | float(0)) }}"
+            secondary: "Gas yesterday, {{ states('sensor.energy_last_gas_reading') | float(0) | round(1) }} kWh"
+            icon: mdi:fire
+            icon_color: "#8D9BAA"
+            tap_action: { action: more-info }
+            grid_options: { columns: 12, rows: auto }
+
+      # ── Centre: this room ────────────────────────────────────────────────
+      - type: grid
+        cards:
+          - type: custom:mushroom-title-card
+            title: Living room
+            card_mod: &title
+              style: |
+                ha-card {
+                  background: none !important;
+                  border: none !important;
+                  box-shadow: none !important;
+                  backdrop-filter: none !important;
+                  -webkit-backdrop-filter: none !important;
+                  padding: 22px 8px 4px 8px;
+                }
+            grid_options: { columns: 12, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.living_room
+            name: Uplighter
+            icon: mdi:floor-lamp
+            show_brightness_control: true
+            collapsible_controls: false
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            grid_options: { columns: 12, rows: auto }
+
+          # Aurora AOne downlights, brightness only. No slider here: this column
+          # has no room to spare, and adding one pushed the kitchen tiles off the
+          # bottom of the 800px screen. Tap toggles, hold gives the full control,
+          # and the Lights view carries the real slider. Half-width pair, the
+          # way the kitchen pair works; front wired 2026-09-24.
+          - type: custom:mushroom-light-card
+            entity: light.living_room_back
+            name: Back
+            icon: mdi:ceiling-light-outline
+            layout: vertical
+            show_brightness_control: false
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            grid_options: { columns: 6, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.living_room_front
+            name: Front
+            icon: mdi:ceiling-light-outline
+            layout: vertical
+            show_brightness_control: false
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            grid_options: { columns: 6, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.matrix_light
+            name: Matrix light
+            icon: mdi:dots-grid
+            show_brightness_control: true
+            collapsible_controls: true
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            grid_options: { columns: 12, rows: auto }
+
+          - type: custom:mushroom-media-player-card
+            entity: media_player.living_room_tv
+            name: TV
+            icon: mdi:television
+            use_media_info: true
+            show_volume_level: true
+            volume_controls: [volume_set, volume_mute]
+            media_controls: [on_off]
+            collapsible_controls: false
+            tap_action: { action: more-info }
+            grid_options: { columns: 12, rows: auto }
+
+      # ── Right: the kitchen, then the rest of the house flat on the ground ──
+      # The kitchen pair used to sit under the living room, but a third living
+      # room light (and a fourth coming) pushed it past the 800px screen. It
+      # stays glass rather than flat: glass means "you touch this often", and
+      # the kitchen lights are the second most touched thing on the panel.
+      - type: grid
+        cards:
+          - type: custom:mushroom-title-card
+            title: Kitchen
+            card_mod: *title
+            grid_options: { columns: 12, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.kitchen_front
+            name: Front
+            icon: mdi:ceiling-light
+            layout: vertical
+            show_brightness_control: false
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            grid_options: { columns: 6, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.kitchen_back
+            name: Back
+            icon: mdi:ceiling-light
+            layout: vertical
+            show_brightness_control: false
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            grid_options: { columns: 6, rows: auto }
+
+          - type: custom:mushroom-title-card
+            title: Around the house
+            card_mod: *title
+            grid_options: { columns: 12, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.downstairs
+            name: Hall
+            icon: mdi:wall-sconce-flat
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            card_mod: *flat
+            grid_options: { columns: 12, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.front_porch
+            name: Front porch
+            icon: mdi:outdoor-lamp
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            card_mod: *flat
+            grid_options: { columns: 12, rows: auto }
+
+          - type: custom:mushroom-entity-card
+            entity: switch.sun_room
+            name: Sun room
+            icon: mdi:sun-angle
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            card_mod: *flat
+            grid_options: { columns: 12, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.upstairs
+            name: Landing
+            icon: mdi:stairs-up
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            card_mod: *flat
+            grid_options: { columns: 12, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.bedroom
+            name: Bedroom
+            icon: mdi:bed
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            card_mod: *flat
+            grid_options: { columns: 12, rows: auto }
+
+          - type: custom:mushroom-template-card
+            primary: Lights off
+            secondary: Everything, downstairs and up
+            icon: mdi:weather-night
+            icon_color: "#E0A050"
+            tap_action:
+              action: perform-action
+              perform_action: light.turn_off
+              target: { entity_id: all }
+            card_mod: &lightsoff
+              style: |
+                ha-card {
+                  background-color: rgba(224,160,80,.12);
+                  border-color: rgba(224,160,80,.28);
+                  margin-top: 8px;
+                }
+            grid_options: { columns: 12, rows: auto }
+
+  # ── Lights: the bulb key lands here ────────────────────────────────────
+  # Reached by the side keys and URL only (the theme hides the view bar).
+  # Every light with a real brightness slider.
+  - title: Lights
+    path: lights
+    type: sections
+    max_columns: 3
+    theme: Wall Panel
+    sections:
+
+      - type: grid
+        cards:
+          - type: custom:mushroom-title-card
+            title: This room
+            card_mod: *title
+            grid_options: { columns: 12, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.living_room
+            name: Uplighter
+            icon: mdi:floor-lamp
+            show_brightness_control: true
+            collapsible_controls: false
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            grid_options: { columns: 12, rows: auto }
+
+          # Aurora AOne downlights, brightness only. Back went in 2026-09-19,
+          # front 2026-09-24.
+          - type: custom:mushroom-light-card
+            entity: light.living_room_back
+            name: Back light
+            icon: mdi:ceiling-light-outline
+            show_brightness_control: true
+            collapsible_controls: false
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            grid_options: { columns: 12, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.living_room_front
+            name: Front light
+            icon: mdi:ceiling-light-outline
+            show_brightness_control: true
+            collapsible_controls: false
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            grid_options: { columns: 12, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.matrix_light
+            name: Matrix light
+            icon: mdi:dots-grid
+            show_brightness_control: true
+            collapsible_controls: false
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            grid_options: { columns: 12, rows: auto }
+
+      - type: grid
+        cards:
+          - type: custom:mushroom-title-card
+            title: Kitchen
+            card_mod: *title
+            grid_options: { columns: 12, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.kitchen_front
+            name: Front
+            icon: mdi:ceiling-light
+            show_brightness_control: true
+            collapsible_controls: false
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            grid_options: { columns: 12, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.kitchen_back
+            name: Back
+            icon: mdi:ceiling-light
+            show_brightness_control: true
+            collapsible_controls: false
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            grid_options: { columns: 12, rows: auto }
+
+      - type: grid
+        cards:
+          - type: custom:mushroom-title-card
+            title: Around the house
+            card_mod: *title
+            grid_options: { columns: 12, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.downstairs
+            name: Hall
+            icon: mdi:wall-sconce-flat
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            card_mod: *flat
+            grid_options: { columns: 12, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.front_porch
+            name: Front porch
+            icon: mdi:outdoor-lamp
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            card_mod: *flat
+            grid_options: { columns: 12, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.upstairs
+            name: Landing
+            icon: mdi:stairs-up
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            card_mod: *flat
+            grid_options: { columns: 12, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.bedroom
+            name: Bedroom
+            icon: mdi:bed
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            card_mod: *flat
+            grid_options: { columns: 12, rows: auto }
+
+          - type: custom:mushroom-entity-card
+            entity: switch.sun_room
+            name: Sun room
+            icon: mdi:sun-angle
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            card_mod: *flat
+            grid_options: { columns: 12, rows: auto }
+
+          - type: custom:mushroom-template-card
+            primary: Lights off
+            secondary: Everything, downstairs and up
+            icon: mdi:weather-night
+            icon_color: "#E0A050"
+            tap_action:
+              action: perform-action
+              perform_action: light.turn_off
+              target: { entity_id: all }
+            card_mod: *lightsoff
+            grid_options: { columns: 12, rows: auto }
+
+  # ── Printer: the Bambu A1 Mini ────────────────────────────────────────
+  # Uses the ha-bambulab integration (HACS). Every entity is prefixed
+  # a1mini_SERIAL_: replace SERIAL with your printer's serial as it appears in
+  # your entity ids (lower case). It changes if the machine is ever replaced or
+  # re-paired; grep that string and nothing else has to move. Markdown cards
+  # set P once and build ids with `P ~ 'name'` so the prefix appears once per
+  # card rather than once per reading.
+  #
+  # Three columns, twelve grid rows each (64 * rows - 8 = 760px, the panel's
+  # whole height): the print on the left, what it is making in the middle, the
+  # machine on the right. Nothing here scrolls and nothing changes height, so
+  # every idle state is written into a template. There are NO conditional cards
+  # on this page and there must not be: a hidden conditional still reserves its
+  # grid rows, which is what pushed the chamber light off the screen on the
+  # first build. Pause/resume/idle is one card calling script.printer_pause_resume.
+  #
+  # Stop is deliberately NOT on this page. It is a living-room wall at child
+  # height and a mis-tap would bin a twelve-hour print; stop lives on the main
+  # dashboard instead. Pause asks first.
+  - title: Printer
+    path: printer
+    type: sections
+    max_columns: 3
+    theme: Wall Panel
+    sections:
+
+      # ── Left: the print ────────────────────────────────────────────────
+      - type: grid
+        cards:
+          - type: custom:mushroom-legacy-template-card
+            primary: |-
+              {{ '%.0f' | format(states('sensor.a1mini_SERIAL_print_progress') | float(0)) ~ '%'
+                 if states('sensor.a1mini_SERIAL_print_status') in ['running','pause']
+                 else {'finish':'Done','failed':'Failed','idle':'Idle','prepare':'Starting',
+                        'slicing':'Slicing','init':'Waking','offline':'Offline',
+                        'unknown':'No idea'}.get(states('sensor.a1mini_SERIAL_print_status'), 'Offline') }}
+            secondary: |-
+              {% set st = states('sensor.a1mini_SERIAL_print_status') %}
+              {%- if st in ['running','pause'] -%}
+              Layer {{ states('sensor.a1mini_SERIAL_current_layer') }} of {{ states('sensor.a1mini_SERIAL_total_layer_count') }}
+              {%- elif st == 'finish' -%}
+              Bed is clear when you are
+              {%- elif st == 'idle' -%}
+              Nothing on the plate
+              {%- else -%}
+              {{ states('sensor.a1mini_SERIAL_current_stage') | replace('_',' ') | capitalize }}
+              {%- endif -%}
+            icon: ""
+            tap_action: { action: none }
+            card_mod:
+              style: |
+                ha-card {
+                  background: none !important;
+                  border: none !important;
+                  box-shadow: none !important;
+                  backdrop-filter: none !important;
+                  -webkit-backdrop-filter: none !important;
+                  padding: 10px 6px 0 6px;
+                  --card-primary-font-size: 88px;
+                  --card-primary-font-weight: 600;
+                  --card-primary-line-height: 1;
+                  --card-primary-letter-spacing: -0.03em;
+                  --card-secondary-font-size: 21px;
+                  --card-secondary-font-weight: 500;
+                  --card-secondary-line-height: 1.4;
+                }
+            grid_options: { columns: 12, rows: 4 }
+
+          # The bar is the ha-card itself: content hidden, height forced, the
+          # fill painted by a templated gradient. card-mod cannot reach inside
+          # ha-markdown's shadow root on this panel (trap 6) but it can hide the
+          # whole element, which is all this needs.
+          - type: markdown
+            content: " "
+            card_mod:
+              style: |
+                {% set p = ([[states('sensor.a1mini_SERIAL_print_progress') | float(0), 0] | max, 100] | min) | round(0) | int
+                     if states('sensor.a1mini_SERIAL_print_status') in ['running','pause','finish'] else 0 %}
+                ha-card {
+                  background: linear-gradient(to right,
+                    #E0A050 0%, #E0A050 {{ p }}%,
+                    rgba(255,255,255,.09) {{ p }}%, rgba(255,255,255,.09) 100%) !important;
+                  border: 1px solid rgba(255,255,255,.16) !important;
+                  box-shadow: none !important;
+                  height: 18px !important;
+                  min-height: 18px !important;
+                  border-radius: 999px !important;
+                  overflow: hidden !important;
+                  margin-top: 12px;
+                }
+                ha-markdown { display: none !important; }
+            grid_options: { columns: 12, rows: 1 }
+
+          - type: markdown
+            title: Time
+            content: |-
+              {%- set P = 'sensor.a1mini_SERIAL_' -%}
+              {%- set st = states(P ~ 'print_status') -%}
+              {%- set mins = (states(P ~ 'remaining_time') | float(0) * 60) | round(0) | int -%}
+              {%- set left = (mins // 60) ~ 'h ' ~ '%02d' % (mins % 60) ~ 'm' if mins >= 60 else mins ~ ' min' -%}
+              {%- set ns = namespace(l=[]) -%}
+              {%- if st in ['running','pause'] -%}
+              {%- set ns.l = ['**' ~ left ~ '** left'] -%}
+              {%- if has_value(P ~ 'end_time') -%}
+              {%- set ns.l = ns.l + ['Finishes **' ~ as_local(as_datetime(states(P ~ 'end_time'))).strftime('%H:%M') ~ '**'] -%}
+              {%- endif -%}
+              {%- if has_value(P ~ 'start_time') -%}
+              {%- set ns.l = ns.l + ['Started ' ~ as_local(as_datetime(states(P ~ 'start_time'))).strftime('%H:%M')] -%}
+              {%- endif -%}
+              {%- elif st == 'finish' -%}
+              {%- set ns.l = ['**Finished**'] -%}
+              {%- if has_value(P ~ 'end_time') -%}
+              {%- set ns.l = ns.l + ['at ' ~ as_local(as_datetime(states(P ~ 'end_time'))).strftime('%H:%M')] -%}
+              {%- endif -%}
+              {%- else -%}
+              {%- set ns.l = ['*Idle*', 'Send it a plate from the slicer'] -%}
+              {%- endif -%}
+              {{ ns.l | join('<br>') }}
+            card_mod:
+              style: |
+                ha-card {
+                  overflow: hidden;
+                  --ha-card-header-color: #E0A050;
+                  --ha-font-weight-normal: 600;
+                }
+                ha-markdown { font-size: 22px; line-height: 1.45; font-weight: 400; }
+            grid_options: { columns: 12, rows: 3 }
+
+          # One tile, not two conditionals. A hidden conditional card still
+          # reserves its grid rows in a sections view, so three of them added
+          # four dead rows and pushed the chamber light off the bottom of the
+          # panel. script.printer_pause_resume does the branching instead:
+          # running presses pause, paused presses resume, idle does nothing.
+          - type: custom:mushroom-legacy-template-card
+            entity: sensor.a1mini_SERIAL_print_status
+            primary: |-
+              {% set st = states('sensor.a1mini_SERIAL_print_status') %}
+              {%- if st == 'running' %}Pause
+              {%- elif st == 'pause' %}Resume
+              {%- else %}Nothing printing{% endif %}
+            secondary: |-
+              {% set st = states('sensor.a1mini_SERIAL_print_status') %}
+              {%- if st == 'running' %}Asks before it does
+              {%- elif st == 'pause' %}Carry on where it stopped
+              {%- elif is_state('binary_sensor.a1mini_SERIAL_extruder_filament','on') %}Filament loaded
+              {%- else %}No filament in the extruder{% endif %}
+            icon: |-
+              {% set st = states('sensor.a1mini_SERIAL_print_status') %}
+              {%- if st == 'running' %}mdi:pause
+              {%- elif st == 'pause' %}mdi:play
+              {%- else %}mdi:printer-3d{% endif %}
+            icon_color: |-
+              {% set st = states('sensor.a1mini_SERIAL_print_status') %}
+              {%- if st == 'running' %}#E0A050
+              {%- elif st == 'pause' %}#7FB77E
+              {%- else %}disabled{% endif %}
+            tap_action:
+              action: perform-action
+              perform_action: script.printer_pause_resume
+              confirmation:
+                text: Pause or resume the print?
+            card_mod:
+              style: |
+                ha-card {
+                  --card-primary-font-size: 19px;
+                  --card-primary-font-weight: 600;
+                  --card-secondary-font-size: 14px;
+                }
+            grid_options: { columns: 12, rows: 2 }
+
+          - type: custom:mushroom-light-card
+            entity: light.a1mini_SERIAL_chamber_light
+            name: Chamber light
+            icon: mdi:lightbulb-on-outline
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            grid_options: { columns: 12, rows: 2 }
+
+      # ── Middle: what it is making ──────────────────────────────────────
+      - type: grid
+        cards:
+          # A still, not a stream. camera_view live would pull an MJPEG the
+          # whole time this page is up, and this panel has no frames to spare
+          # (see www/glass-probe.html and its measurements).
+          - type: picture-entity
+            entity: camera.a1mini_SERIAL_camera
+            camera_view: auto
+            show_state: false
+            show_name: false
+            tap_action: { action: more-info }
+            card_mod:
+              style: |
+                ha-card { overflow: hidden; padding: 0; }
+            grid_options: { columns: 12, rows: 5 }
+
+          - type: markdown
+            title: On the plate
+            content: |-
+              {%- set P = 'sensor.a1mini_SERIAL_' -%}
+              {%- set name = states(P ~ 'task_name') | replace('.gcode.3mf','') | replace('.3mf','') | replace('_',' ') -%}
+              {%- set ns = namespace(l=[]) -%}
+              {%- if name not in ['unknown','unavailable',''] -%}
+              {%- set ns.l = ['**' ~ name ~ '**'] -%}
+              {%- else -%}
+              {%- set ns.l = ['*No job loaded*'] -%}
+              {%- endif -%}
+              {%- set g = states(P ~ 'print_weight') | float(0) -%}
+              {%- set m = states(P ~ 'print_length') | float(0) -%}
+              {%- if g > 0 -%}
+              {%- set ns.l = ns.l + [g | round(0) | int ~ ' g · ' ~ m | round(1) ~ ' m of filament'] -%}
+              {%- endif -%}
+              {%- set obj = states(P ~ 'printable_objects') | int(0) -%}
+              {%- set skip = states(P ~ 'skipped_objects') | int(0) -%}
+              {%- if obj > 0 -%}
+              {%- set ns.l = ns.l + [obj ~ (' object' if obj == 1 else ' objects') ~ (', ' ~ skip ~ ' skipped' if skip else '')] -%}
+              {%- endif -%}
+              {{ ns.l | join('<br>') }}
+            card_mod:
+              style: |
+                ha-card { overflow: hidden; --ha-font-weight-normal: 600; }
+                ha-markdown { font-size: 19px; line-height: 1.4; font-weight: 400; }
+            grid_options: { columns: 12, rows: 4 }
+
+          - type: markdown
+            title: Setup
+            content: |-
+              {%- set P = 'sensor.a1mini_SERIAL_' -%}
+              {%- set dead = ['unknown','unavailable','','none'] -%}
+              {%- set ns = namespace(l=[]) -%}
+              {%- if states(P ~ 'speed_profile') not in dead -%}
+              {%- set ns.l = ns.l + [states(P ~ 'speed_profile') | replace('_',' ') | capitalize ~ ' speed'] -%}
+              {%- endif -%}
+              {%- if states(P ~ 'nozzle_size') not in dead -%}
+              {%- set ns.l = ns.l + [states(P ~ 'nozzle_size') ~ ' mm ' ~ states(P ~ 'nozzle_type') | replace('_',' ')] -%}
+              {%- endif -%}
+              {%- if states(P ~ 'print_bed_type') not in dead -%}
+              {%- set ns.l = ns.l + [states(P ~ 'print_bed_type') | replace('_',' ') | capitalize] -%}
+              {%- endif -%}
+              {{ ns.l | join('<br>') if ns.l else '*Printer not reporting*' }}
+            card_mod:
+              style: |
+                ha-card { overflow: hidden; --ha-font-weight-normal: 600; }
+                ha-markdown { font-size: 18px; line-height: 1.4; font-weight: 400; }
+            grid_options: { columns: 12, rows: 3 }
+
+      # ── Right: the machine ─────────────────────────────────────────────
+      - type: grid
+        cards:
+          - type: custom:mushroom-legacy-template-card
+            entity: sensor.a1mini_SERIAL_nozzle_temperature
+            primary: "{{ states('sensor.a1mini_SERIAL_nozzle_temperature') | float(0) | round(0) | int }}°C"
+            secondary: "Nozzle{{ ' · heading for ' ~ (states('sensor.a1mini_SERIAL_nozzle_target_temperature') | float(0) | round(0) | int) ~ '°' if (states('sensor.a1mini_SERIAL_nozzle_target_temperature') | float(0)) > 0 else (' · cooling' if (states('sensor.a1mini_SERIAL_nozzle_temperature') | float(0)) > 50 else ' · cold') }}"
+            icon: mdi:printer-3d-nozzle-heat-outline
+            icon_color: "{{ '#E0705A' if (states('sensor.a1mini_SERIAL_nozzle_temperature') | float(0)) > 50 else '#8D9BAA' }}"
+            tap_action: { action: more-info }
+            card_mod: &stat
+              style: |
+                ha-card {
+                  --card-primary-font-size: 31px;
+                  --card-primary-font-weight: 600;
+                  --card-primary-line-height: 1.15;
+                  --card-secondary-font-size: 15px;
+                }
+            grid_options: { columns: 12, rows: 2 }
+
+          - type: custom:mushroom-legacy-template-card
+            entity: sensor.a1mini_SERIAL_bed_temperature
+            primary: "{{ states('sensor.a1mini_SERIAL_bed_temperature') | float(0) | round(0) | int }}°C"
+            secondary: "Bed{{ ' · heading for ' ~ (states('sensor.a1mini_SERIAL_bed_target_temperature') | float(0) | round(0) | int) ~ '°' if (states('sensor.a1mini_SERIAL_bed_target_temperature') | float(0)) > 0 else (' · cooling' if (states('sensor.a1mini_SERIAL_bed_temperature') | float(0)) > 40 else ' · cold') }}"
+            icon: mdi:heating-coil
+            icon_color: "{{ '#E0705A' if (states('sensor.a1mini_SERIAL_bed_temperature') | float(0)) > 40 else '#8D9BAA' }}"
+            tap_action: { action: more-info }
+            card_mod: *stat
+            grid_options: { columns: 12, rows: 2 }
+
+          - type: custom:mushroom-legacy-template-card
+            entity: sensor.a1mini_SERIAL_cooling_fan_speed
+            primary: "{{ states('sensor.a1mini_SERIAL_cooling_fan_speed') | float(0) | round(0) | int }}%"
+            secondary: "Part fan · heatbreak {{ states('sensor.a1mini_SERIAL_heatbreak_fan_speed') | float(0) | round(0) | int }}%"
+            icon: mdi:fan
+            icon_color: "{{ '#7FB1D8' if (states('sensor.a1mini_SERIAL_cooling_fan_speed') | float(0)) > 0 else 'disabled' }}"
+            tap_action: { action: more-info }
+            card_mod: *stat
+            grid_options: { columns: 12, rows: 2 }
+
+          # AMS Lite, four slots. The active one is marked rather than coloured:
+          # a swatch would need inline HTML through the markdown sanitiser, and
+          # a wall panel reads a caret from across the room just as well.
+          - type: markdown
+            title: Filament
+            content: |-
+              {%- set P = 'sensor.a1mini_SERIAL_' -%}
+              {%- set ns = namespace(l=[]) -%}
+              {%- for i in [1,2,3,4] -%}
+              {%- set e = P ~ 'ams_1_tray_' ~ i -%}
+              {%- set on = state_attr(e,'active') -%}
+              {%- set s = states(e) -%}
+              {%- set lbl = s if s not in ['unknown','unavailable'] else '*empty*' -%}
+              {%- set ns.l = ns.l + [('**› ' ~ i ~ '&nbsp; ' ~ lbl ~ '**' if on else '&nbsp;&nbsp;&nbsp;&nbsp;' ~ i ~ '&nbsp; ' ~ lbl)] -%}
+              {%- endfor -%}
+              {#- The external spool is a fifth source, not a footnote: an A1 Mini
+                  cannot feed TPU through the AMS Lite, so a TPU print runs off the
+                  spool and all four AMS rows would show no active filament. It gets
+                  the same caret from its own binary_sensor.
+                  No "dry box" line: the AMS *Lite* has no humidity or temperature
+                  sensor, so ams_1_humidity and ams_1_temperature sit at 0 forever
+                  and humidity_index at 1. A constant next to real readings reads as
+                  a measurement and is not one. -#}
+              {%- set ext = states(P ~ 'externalspool_external_spool') -%}
+              {%- if ext not in ['unknown','unavailable',''] -%}
+              {%- set eon = is_state('binary_sensor.a1mini_SERIAL_externalspool_active','on') -%}
+              {%- set ns.l = ns.l + [('**&rsaquo; Ext&nbsp; ' ~ ext ~ '**' if eon else '&nbsp;&nbsp;&nbsp;&nbsp;Ext&nbsp; ' ~ ext)] -%}
+              {%- endif -%}
+              {{ ns.l | join('<br>') }}
+            card_mod:
+              style: |
+                ha-card { overflow: hidden; --ha-font-weight-normal: 600; }
+                ha-markdown { font-size: 18px; line-height: 1.38; font-weight: 400; }
+            grid_options: { columns: 12, rows: 4 }
+
+          - type: custom:mushroom-legacy-template-card
+            primary: |-
+              {% if is_state('binary_sensor.a1mini_SERIAL_print_error','on') %}Print error
+              {%- elif is_state('binary_sensor.a1mini_SERIAL_hms_errors','on') %}Printer warning
+              {%- elif is_state('binary_sensor.a1mini_SERIAL_online','on') %}Online
+              {%- else %}Offline{% endif %}
+            secondary: "Wi-Fi {{ states('sensor.a1mini_SERIAL_wi_fi_signal') }} dBm · {{ states('sensor.a1mini_SERIAL_mqtt_connection_mode') }}"
+            icon: |-
+              {% if is_state('binary_sensor.a1mini_SERIAL_print_error','on') or is_state('binary_sensor.a1mini_SERIAL_hms_errors','on') %}mdi:alert-circle-outline
+              {%- elif is_state('binary_sensor.a1mini_SERIAL_online','on') %}mdi:check-circle-outline
+              {%- else %}mdi:cloud-off-outline{% endif %}
+            icon_color: |-
+              {% if is_state('binary_sensor.a1mini_SERIAL_print_error','on') or is_state('binary_sensor.a1mini_SERIAL_hms_errors','on') %}#E0705A
+              {%- elif is_state('binary_sensor.a1mini_SERIAL_online','on') %}#7FB77E
+              {%- else %}disabled{% endif %}
+            tap_action: { action: none }
+            grid_options: { columns: 12, rows: 2 }
+
+
+  # ── Per-person subviews, reached by tapping a panel on Today ───────────
+  # subview: true keeps them out of the view bar. The back arrow a subview
+  # normally gets lives in the top toolbar, which this panel hides, so each
+  # carries its own. Left column: back, the name, today in full. Right
+  # column: the rest of the week, grouped by day. Grid rows fix the heights
+  # (1 + 2 + 9 rows left, 12 right, both 760px) so the page keeps Today's
+  # geometry instead of floating two small cards on the wallpaper.
+  #
+  # Year groups are computed from the entry year so they roll over every
+  # September on their own.
+  #
+  # Two examples here: person-alex (an adult) and person-mia (a child, with a
+  # school card). To add someone, copy person-mia, change the path, the title,
+  # the name in every selectattr('who','eq',...) and the colour, then point
+  # their panel on Today at the new path. Keep person-alex FIRST: it defines
+  # the &back and &personlist anchors every later subview aliases.
+
+  - title: Alex
+    path: person-alex
+    subview: true
+    type: sections
+    max_columns: 2
+    theme: Wall Panel
+    sections:
+      - type: grid
+        cards:
+          - type: custom:mushroom-legacy-template-card
+            primary: Everyone
+            secondary: Back to today
+            icon: mdi:chevron-left
+            icon_color: "#8D9BAA"
+            tap_action: { action: navigate, navigation_path: /wall-panel/today }
+            card_mod: &back
+              style: |
+                ha-card {
+                  background: none !important;
+                  border: none !important;
+                  box-shadow: none !important;
+                  backdrop-filter: none !important;
+                  -webkit-backdrop-filter: none !important;
+                  padding: 6px 4px 0 4px;
+                  --card-primary-font-size: 20px;
+                  --card-secondary-font-size: 14px;
+                  --icon-size: 44px;
+                }
+            grid_options: { columns: 12, rows: 1 }
+
+          - type: custom:mushroom-legacy-template-card
+            primary: Alex
+            secondary: >-
+              {% set t = (state_attr('sensor.family_today','events') or []) | selectattr('who','eq','Alex') | list | count %}
+              {% set today = now().strftime('%Y-%m-%d') %}
+              {% set w = (state_attr('sensor.family_week','events') or []) | selectattr('who','eq','Alex') | rejectattr('day','eq',today) | list | count %}
+              {{ t }} today · {{ w }} more this week
+            tap_action: { action: none }
+            card_mod:
+              style: |
+                ha-card {
+                  background: none !important;
+                  border: none !important;
+                  box-shadow: none !important;
+                  backdrop-filter: none !important;
+                  -webkit-backdrop-filter: none !important;
+                  padding: 4px 8px 6px 8px;
+                  --card-primary-font-size: 52px;
+                  --card-primary-font-weight: 600;
+                  --card-primary-line-height: 1.05;
+                  --card-primary-letter-spacing: -0.02em;
+                  --card-primary-color: #7FC8D2;
+                  --card-secondary-font-size: 20px;
+                  --card-secondary-line-height: 1.4;
+                }
+            grid_options: { columns: 12, rows: 2 }
+
+          - type: markdown
+            title: Today
+            content: |-
+              {%- set rows = state_attr('sensor.family_today','events') or [] -%}
+              {%- set mine = rows | selectattr('who','eq','Alex') | list -%}
+              {%- set ns = namespace(l=[]) -%}
+              {%- for e in mine -%}
+              {%- set ns.l = ns.l + ['**' ~ ('All day' if e.all_day else e.at) ~ '** ' ~ e.what] -%}
+              {%- endfor -%}
+              {{ ns.l | join('<br>') if ns.l else '*Nothing on*' }}
+            card_mod: &personlist
+              style: |
+                ha-card { overflow: hidden; --ha-font-weight-normal: 600; }
+                ha-markdown { font-size: 21px; line-height: 1.45; font-weight: 400; }
+            grid_options: { columns: 12, rows: 9 }
+
+      - type: grid
+        cards:
+          - type: markdown
+            title: This week
+            content: |-
+              {%- set rows = state_attr('sensor.family_week','events') or [] -%}
+              {%- set today = now().strftime('%Y-%m-%d') -%}
+              {%- set tmrw = (now() + timedelta(days=1)).strftime('%Y-%m-%d') -%}
+              {%- set mine = rows | selectattr('who','eq','Alex') | rejectattr('day','eq',today) | list -%}
+              {%- set ns = namespace(l=[]) -%}
+              {%- for day, evs in mine | groupby('day') -%}
+              {%- set ns.l = ns.l + ['**' ~ ('Tomorrow' if day == tmrw else as_local(as_datetime(day)).strftime('%A')) ~ '**'] -%}
+              {%- for e in evs[:5] -%}
+              {%- set ns.l = ns.l + [('All day' if e.all_day else e.at) ~ ' &nbsp;' ~ e.what] -%}
+              {%- endfor -%}
+              {%- endfor -%}
+              {{ ns.l | join('<br>') if ns.l else '*Nothing else booked this week*' }}
+            card_mod: *personlist
+            grid_options: { columns: 12, rows: 12 }
+
+  - title: Mia
+    path: person-mia
+    subview: true
+    type: sections
+    max_columns: 2
+    theme: Wall Panel
+    sections:
+      - type: grid
+        cards:
+          - type: custom:mushroom-legacy-template-card
+            primary: Everyone
+            secondary: Back to today
+            icon: mdi:chevron-left
+            icon_color: "#8D9BAA"
+            tap_action: { action: navigate, navigation_path: /wall-panel/today }
+            card_mod: *back
+            grid_options: { columns: 12, rows: 1 }
+
+          - type: custom:mushroom-legacy-template-card
+            primary: Mia
+            # Started Year 7 in September 2025: change 2025 and 7 to your own
+            # child's entry year and year group, and it rolls over by itself.
+            secondary: >-
+              {% set ay = now().year if now().month >= 9 else now().year - 1 %}
+              Year {{ ay - 2025 + 7 }} · Example School
+            tap_action: { action: none }
+            card_mod:
+              style: |
+                ha-card {
+                  background: none !important;
+                  border: none !important;
+                  box-shadow: none !important;
+                  backdrop-filter: none !important;
+                  -webkit-backdrop-filter: none !important;
+                  padding: 4px 8px 6px 8px;
+                  --card-primary-font-size: 52px;
+                  --card-primary-font-weight: 600;
+                  --card-primary-line-height: 1.05;
+                  --card-primary-letter-spacing: -0.02em;
+                  --card-primary-color: #D4A8F5;
+                  --card-secondary-font-size: 20px;
+                  --card-secondary-line-height: 1.4;
+                }
+            grid_options: { columns: 12, rows: 2 }
+
+          - type: markdown
+            title: Today
+            content: |-
+              {%- set rows = state_attr('sensor.family_today','events') or [] -%}
+              {%- set mine = rows | selectattr('who','eq','Mia') | list -%}
+              {%- set ns = namespace(l=[]) -%}
+              {%- for e in mine -%}
+              {%- set ns.l = ns.l + ['**' ~ ('All day' if e.all_day else e.at) ~ '** ' ~ e.what] -%}
+              {%- endfor -%}
+              {#- Same fallback the Today view's person panels use: an empty day
+                  shows the next thing rather than "Nothing on" over 568px of void.
+                  A subview that contradicts the page it was opened from is worse
+                  than either answer on its own. -#}
+              {%- if not ns.l -%}
+              {%- set today = now().strftime('%Y-%m-%d') -%}
+              {%- set d1 = (now() + timedelta(days=1)).strftime('%Y-%m-%d') -%}
+              {%- set wk = (state_attr('sensor.family_week','events') or []) | selectattr('who','eq','Mia') | rejectattr('day','eq',today) | list -%}
+              {%- if wk -%}
+              {%- set e = wk[0] -%}
+              {%- set ns.l = ['*Nothing on today*', '', '**Next** ' ~ ('Tomorrow' if e.day == d1 else as_local(as_datetime(e.day)).strftime('%A')) ~ ('' if e.all_day else ' ' ~ e.at), e.what] -%}
+              {%- else -%}
+              {%- set ns.l = ['*Nothing on this week*'] -%}
+              {%- endif -%}
+              {%- endif -%}
+              {{ ns.l | join('<br>') }}
+            card_mod: *personlist
+            grid_options: { columns: 12, rows: 9 }
+
+      - type: grid
+        cards:
+          # From school: Mia's dated items and standing kit, from family-extra.json
+          # (sensor.family_extra). The original panel ran a two-week lesson
+          # timetable here off its own template sensor; that is too tied to one
+          # school to ship, so this card reads the generic gather file instead.
+          # Seven grid rows, capped at six items so it never outgrows them.
+          - type: markdown
+            title: From school
+            content: |-
+              {%- set E = 'sensor.family_extra' -%}
+              {%- set today = now().strftime('%Y-%m-%d') -%}
+              {%- set d1 = (now() + timedelta(days=1)).strftime('%Y-%m-%d') -%}
+              {%- set items = (state_attr(E,'items') or []) | selectattr('who','eq','Mia') | selectattr('date','ge',today) | sort(attribute='date') | list -%}
+              {%- set ns = namespace(l=[]) -%}
+              {%- for i in items[:6] -%}
+              {%- set when = 'Today' if i.date == today else ('Tomorrow' if i.date == d1 else as_local(as_datetime(i.date)).strftime('%a %-d %b')) -%}
+              {#- Kit gets ONE bold span over the whole line. Bolding the date
+                  and then wrapping the line bolds nothing: **a **b** c** is not
+                  nested emphasis in markdown, it just prints asterisks. -#}
+              {%- if i.kind == 'kit' -%}
+              {%- set ns.l = ns.l + ['**' ~ when ~ ' &nbsp;' ~ i.what ~ '**'] -%}
+              {%- else -%}
+              {%- set ns.l = ns.l + ['**' ~ when ~ '** &nbsp;' ~ i.what] -%}
+              {%- endif -%}
+              {%- endfor -%}
+              {%- if items | count > 6 -%}{%- set ns.l = ns.l + ['*+' ~ (items | count - 6) ~ ' further on*'] -%}{%- endif -%}
+              {%- for k in (state_attr(E,'kit') or []) | selectattr('who','eq','Mia') -%}
+              {%- if loop.first -%}{%- set ns.l = ns.l + ['', '**Every day**'] -%}{%- endif -%}
+              {%- set ns.l = ns.l + [k.what] -%}
+              {%- endfor -%}
+              {{ ns.l | join('<br>') if ns.l else '*Nothing from school*' }}
+            card_mod:
+              style: |
+                ha-card { overflow: hidden; --ha-font-weight-normal: 600; }
+                ha-markdown { font-size: 20px; line-height: 1.34; font-weight: 400; }
+            grid_options: { columns: 12, rows: 7 }
+
+          - type: markdown
+            title: This week
+            content: |-
+              {%- set rows = state_attr('sensor.family_week','events') or [] -%}
+              {%- set today = now().strftime('%Y-%m-%d') -%}
+              {%- set tmrw = (now() + timedelta(days=1)).strftime('%Y-%m-%d') -%}
+              {%- set mine = rows | selectattr('who','eq','Mia') | rejectattr('day','eq',today) | list -%}
+              {%- set ns = namespace(l=[]) -%}
+              {%- for day, evs in mine | groupby('day') -%}
+              {%- set ns.l = ns.l + ['**' ~ ('Tomorrow' if day == tmrw else as_local(as_datetime(day)).strftime('%A')) ~ '**'] -%}
+              {%- for e in evs[:5] -%}
+              {%- set ns.l = ns.l + [('All day' if e.all_day else e.at) ~ ' &nbsp;' ~ e.what] -%}
+              {%- endfor -%}
+              {%- endfor -%}
+              {{ ns.l[:8] | join('<br>') ~ ('<br>*+' ~ (ns.l | count - 8) ~ ' more*' if ns.l | count > 8 else '') if ns.l else '*Nothing else booked this week*' }}
+            card_mod: *personlist
+            grid_options: { columns: 12, rows: 5 }
+
+  # ── Detail subviews for the three non-person cards on Today ────────────
+  # Coming up, Tomorrow and School are all summaries with something cut off
+  # the bottom; tapping one opens the whole thing here. Same shape as the
+  # person subviews so the panel has one idea of what a detail page is: back
+  # row, a big title, a tall card on the left and a full-height one on the
+  # right. These MUST stay after the person subviews in this file, because
+  # they alias &back and &personlist, which are defined in the Alex subview
+  # and a YAML alias cannot precede its anchor.
+  #
+  # These columns are ~620px wide, not the Today view's ~272px, so roughly 40
+  # visible characters a line at 21px. Where a list can outgrow its card it
+  # costs each entry in RENDERED lines rather than entries (the same trap
+  # as the School card on Today) instead of a fixed [:N].
+  - title: Coming up
+    path: detail-coming-up
+    subview: true
+    type: sections
+    max_columns: 2
+    theme: Wall Panel
+    sections:
+      - type: grid
+        cards:
+          - type: custom:mushroom-legacy-template-card
+            primary: Everyone
+            secondary: Back to today
+            icon: mdi:chevron-left
+            icon_color: "#8D9BAA"
+            tap_action: { action: navigate, navigation_path: /wall-panel/today }
+            card_mod: *back
+            grid_options: { columns: 12, rows: 1 }
+
+          - type: custom:mushroom-legacy-template-card
+            primary: Coming up
+            secondary: >-
+              {{ (state_attr('sensor.family_today','events') or []) | rejectattr('all_day')
+                 | selectattr('at','gt', now().strftime('%H:%M')) | list | count }} left today
+              · {{ (state_attr('sensor.family_week','events') or []) | count }} this week
+            tap_action: { action: none }
+            card_mod:
+              style: |
+                ha-card {
+                  background: none !important;
+                  border: none !important;
+                  box-shadow: none !important;
+                  backdrop-filter: none !important;
+                  -webkit-backdrop-filter: none !important;
+                  padding: 4px 8px 6px 8px;
+                  --card-primary-font-size: 46px;
+                  --card-primary-font-weight: 600;
+                  --card-primary-line-height: 1.05;
+                  --card-primary-letter-spacing: -0.02em;
+                  --card-primary-color: #F0A0BC;
+                  --card-secondary-font-size: 20px;
+                  --card-secondary-line-height: 1.4;
+                }
+            grid_options: { columns: 12, rows: 2 }
+
+          - type: markdown
+            title: Still today
+            content: |-
+              {%- set rows = state_attr('sensor.family_today','events') or [] -%}
+              {%- set hm = now().strftime('%H:%M') -%}
+              {%- set later = rows | rejectattr('all_day') | selectattr('at','gt',hm) | list -%}
+              {%- set allday = rows | selectattr('all_day') | list -%}
+              {%- set ns = namespace(l=[]) -%}
+              {%- for e in later -%}
+              {%- set ns.l = ns.l + ['**' ~ e.at ~ '** &nbsp;' ~ e.who ~ ' &middot; ' ~ e.what] -%}
+              {%- endfor -%}
+              {%- if not later -%}{%- set ns.l = ['*Nothing left today*'] -%}{%- endif -%}
+              {%- if allday -%}
+              {%- set ns.l = ns.l + ['', '**All day**'] -%}
+              {%- for e in allday -%}{%- set ns.l = ns.l + [e.who ~ ' &middot; ' ~ e.what] -%}{%- endfor -%}
+              {%- endif -%}
+              {{ ns.l | join('<br>') }}
+            card_mod: *personlist
+            grid_options: { columns: 12, rows: 9 }
+
+      - type: grid
+        cards:
+          - type: markdown
+            title: The next few days
+            content: |-
+              {%- set CPL = 40 -%}
+              {%- macro plain(t) -%}{{ t | replace('**','') | replace('*','') | replace('&nbsp;',' ') | replace('&middot;','·') }}{%- endmacro -%}
+              {%- set rows = state_attr('sensor.family_week','events') or [] -%}
+              {%- set today = now().strftime('%Y-%m-%d') -%}
+              {%- set d1 = (now() + timedelta(days=1)).strftime('%Y-%m-%d') -%}
+              {%- set rest = rows | rejectattr('day','eq',today) | list -%}
+              {%- set b = namespace(l=[], h=0, cut=0) -%}
+              {%- for day, evs in rest | groupby('day') -%}
+              {%- set head = '**' ~ ('Tomorrow' if day == d1 else as_local(as_datetime(day)).strftime('%A %-d %b')) ~ '**' -%}
+              {#- Namespaces, not plain variables. `set` inside a for loop does not
+                  survive the loop in Jinja, and the first version of this card built
+                  `block` and `cost` that way: every day rendered its header with
+                  nothing underneath, and the budget stayed at 1 so nothing was ever
+                  cut. Two silent failures from one mistake. -#}
+              {%- set g = namespace(block=[head], cost=1) -%}
+              {%- for e in evs -%}
+              {%- set g.block = g.block + [('All day' if e.all_day else e.at) ~ ' &nbsp;' ~ e.who ~ ' &middot; ' ~ e.what] -%}
+              {%- endfor -%}
+              {%- for x in g.block -%}{%- set g.cost = g.cost + ([1, (plain(x) | trim | length / CPL) | round(0, 'ceil') | int] | max) -%}{%- endfor -%}
+              {%- if b.h + g.cost <= 21 -%}
+              {%- set b.l = b.l + ([''] if b.l else []) + g.block -%}
+              {%- set b.h = b.h + g.cost -%}
+              {%- else -%}
+              {%- set b.cut = b.cut + (evs | count) -%}
+              {%- endif -%}
+              {%- endfor -%}
+              {%- if b.cut -%}{%- set b.l = b.l + ['', '*+' ~ b.cut ~ ' further on*'] -%}{%- endif -%}
+              {{ b.l | join('<br>') if b.l else '*Nothing else this week*' }}
+            card_mod: *personlist
+            grid_options: { columns: 12, rows: 12 }
+
+
+  - title: Tomorrow
+    path: detail-tomorrow
+    subview: true
+    type: sections
+    max_columns: 2
+    theme: Wall Panel
+    sections:
+      - type: grid
+        cards:
+          - type: custom:mushroom-legacy-template-card
+            primary: Everyone
+            secondary: Back to today
+            icon: mdi:chevron-left
+            icon_color: "#8D9BAA"
+            tap_action: { action: navigate, navigation_path: /wall-panel/today }
+            card_mod: *back
+            grid_options: { columns: 12, rows: 1 }
+
+          - type: custom:mushroom-legacy-template-card
+            primary: Tomorrow
+            secondary: >-
+              {{ (now() + timedelta(days=1)).strftime('%A %-d %B') }}
+            tap_action: { action: none }
+            card_mod:
+              style: |
+                ha-card {
+                  background: none !important;
+                  border: none !important;
+                  box-shadow: none !important;
+                  backdrop-filter: none !important;
+                  -webkit-backdrop-filter: none !important;
+                  padding: 4px 8px 6px 8px;
+                  --card-primary-font-size: 46px;
+                  --card-primary-font-weight: 600;
+                  --card-primary-line-height: 1.05;
+                  --card-primary-letter-spacing: -0.02em;
+                  --card-primary-color: #F2F5F8;
+                  --card-secondary-font-size: 20px;
+                  --card-secondary-line-height: 1.4;
+                }
+            grid_options: { columns: 12, rows: 2 }
+
+          - type: markdown
+            title: What is on
+            content: |-
+              {%- set CPL = 40 -%}
+              {%- macro plain(t) -%}{{ t | replace('**','') | replace('*','') | replace('&nbsp;',' ') | replace('&middot;','·') }}{%- endmacro -%}
+              {%- set rows = state_attr('sensor.family_week','events') or [] -%}
+              {%- set d1 = (now() + timedelta(days=1)).strftime('%Y-%m-%d') -%}
+              {%- set mine = rows | selectattr('day','eq',d1) | list -%}
+              {%- set b = namespace(l=[], h=0, cut=0) -%}
+              {%- for e in mine | selectattr('all_day') | list + mine | rejectattr('all_day') | list -%}
+              {%- set x = '**' ~ ('All day' if e.all_day else e.at) ~ '** &nbsp;' ~ e.who ~ ' &middot; ' ~ e.what -%}
+              {%- set cost = [1, (plain(x) | trim | length / CPL) | round(0, 'ceil') | int] | max -%}
+              {%- if b.h + cost <= 15 -%}{%- set b.l = b.l + [x] -%}{%- set b.h = b.h + cost -%}
+              {%- else -%}{%- set b.cut = b.cut + 1 -%}{%- endif -%}
+              {%- endfor -%}
+              {%- if b.cut -%}{%- set b.l = b.l + ['*+' ~ b.cut ~ ' more*'] -%}{%- endif -%}
+              {{ b.l | join('<br>') if b.l else '*Nothing booked*' }}
+            card_mod: *personlist
+            grid_options: { columns: 12, rows: 9 }
+
+      - type: grid
+        cards:
+          - type: markdown
+            title: Getting ready
+            content: |-
+              {%- set d1 = (now() + timedelta(days=1)).strftime('%Y-%m-%d') -%}
+              {%- set items = (state_attr('sensor.family_extra','items') or []) | selectattr('date','eq',d1) | list -%}
+              {%- set kit = items | selectattr('kind','eq','kit') | list -%}
+              {%- set ns = namespace(l=[]) -%}
+              {%- for k in kit -%}{%- set ns.l = ns.l + ['⚠ **' ~ k.who ~ '** &middot; ' ~ k.what] -%}{%- endfor -%}
+              {#- Two independent sources for the same fact, so say when they
+                  disagree rather than picking one silently. The gather file
+                  carries kit as items; the calendars carry their own all-day
+                  "PE" or "Swimming" entries. They disagreed the first evening
+                  this page existed, and the costly direction is the calendar
+                  claiming kit while the gather says none: that is the morning a
+                  child arrives without it. So a calendar entry for someone the
+                  gather has no kit for is shown as a question, not dropped. -#}
+              {%- set kitwho = kit | map(attribute='who') | list -%}
+              {%- set cal = (state_attr('sensor.family_week','events') or [])
+                   | selectattr('day','eq',d1) | selectattr('all_day')
+                   | rejectattr('who','in',kitwho)
+                   | selectattr('what','search','(?i)\\bPE\\b|swim|kit') | list -%}
+              {%- for e in cal -%}
+              {%- set ns.l = ns.l + ['⚠ **Check: kit for ' ~ e.who ~ '?**',
+                   'Calendar says &ldquo;' ~ e.what ~ '&rdquo;, the gather says nothing'] -%}
+              {%- endfor -%}
+              {%- if not ns.l -%}{%- set ns.l = ['*Nothing to pack*'] -%}{%- endif -%}
+              {%- set due = items | rejectattr('kind','eq','kit') | list -%}
+              {%- if due -%}
+              {%- set ns.l = ns.l + ['', '**From school**'] -%}
+              {%- for i in due -%}{%- set ns.l = ns.l + [i.who ~ ' &middot; ' ~ i.what] -%}{%- endfor -%}
+              {%- endif -%}
+              {{ ns.l | join('<br>') }}
+            card_mod: *personlist
+            grid_options: { columns: 12, rows: 12 }
+
+
+  - title: School
+    path: detail-school
+    subview: true
+    type: sections
+    max_columns: 2
+    theme: Wall Panel
+    sections:
+      - type: grid
+        cards:
+          - type: custom:mushroom-legacy-template-card
+            primary: Everyone
+            secondary: Back to today
+            icon: mdi:chevron-left
+            icon_color: "#8D9BAA"
+            tap_action: { action: navigate, navigation_path: /wall-panel/today }
+            card_mod: *back
+            grid_options: { columns: 12, rows: 1 }
+
+          - type: custom:mushroom-legacy-template-card
+            primary: School
+            secondary: >-
+              {{ (state_attr('sensor.family_extra','schools') or []) | map(attribute='school') | join(' · ') or 'No schools listed' }}
+            tap_action: { action: none }
+            card_mod:
+              style: |
+                ha-card {
+                  background: none !important;
+                  border: none !important;
+                  box-shadow: none !important;
+                  backdrop-filter: none !important;
+                  -webkit-backdrop-filter: none !important;
+                  padding: 4px 8px 6px 8px;
+                  --card-primary-font-size: 46px;
+                  --card-primary-font-weight: 600;
+                  --card-primary-line-height: 1.05;
+                  --card-primary-letter-spacing: -0.02em;
+                  --card-primary-color: #F2F5F8;
+                  --card-secondary-font-size: 20px;
+                  --card-secondary-line-height: 1.4;
+                }
+            grid_options: { columns: 12, rows: 2 }
+
+          - type: markdown
+            title: Dated
+            content: |-
+              {%- set CPL = 40 -%}
+              {%- macro plain(t) -%}{{ t | replace('**','') | replace('*','') | replace('&nbsp;',' ') | replace('&middot;','·') }}{%- endmacro -%}
+              {%- set items = (state_attr('sensor.family_extra','items') or []) | sort(attribute='date') -%}
+              {%- set today = now().strftime('%Y-%m-%d') -%}
+              {%- set d1 = (now() + timedelta(days=1)).strftime('%Y-%m-%d') -%}
+              {%- set b = namespace(l=[], h=0, cut=0) -%}
+              {%- for i in items -%}
+              {%- set when = 'Today' if i.date == today else ('Tomorrow' if i.date == d1 else as_local(as_datetime(i.date)).strftime('%a %-d %b')) -%}
+              {%- set x = '**' ~ when ~ '** &nbsp;' ~ i.who ~ ' &middot; ' ~ i.what -%}
+              {%- set cost = [1, (plain(x) | trim | length / CPL) | round(0, 'ceil') | int] | max -%}
+              {%- if b.h + cost <= 15 -%}{%- set b.l = b.l + [x] -%}{%- set b.h = b.h + cost -%}
+              {%- else -%}{%- set b.cut = b.cut + 1 -%}{%- endif -%}
+              {%- endfor -%}
+              {%- if b.cut -%}{%- set b.l = b.l + ['*+' ~ b.cut ~ ' further on*'] -%}{%- endif -%}
+              {{ b.l | join('<br>') if b.l else '*Nothing dated*' }}
+            card_mod: *personlist
+            grid_options: { columns: 12, rows: 9 }
+
+      - type: grid
+        cards:
+          - type: markdown
+            title: Kit, and where this came from
+            content: |-
+              {%- set E = 'sensor.family_extra' -%}
+              {%- set src = state_attr(E,'sources') or {} -%}
+              {%- set ts = state_attr(E,'checked_at') -%}
+              {%- set age = ((now() - as_datetime(ts)).total_seconds() / 86400) | round(0) | int if ts else none -%}
+              {%- set ns = namespace(l=[]) -%}
+              {%- for k in (state_attr(E,'kit') or []) -%}
+              {%- set ns.l = ns.l + ['**' ~ k.who ~ '** &nbsp;' ~ k.what] -%}
+              {%- endfor -%}
+              {%- if not ns.l -%}{%- set ns.l = ['*No kit recorded*'] -%}{%- endif -%}
+              {%- set flags = state_attr(E,'flags') or [] -%}
+              {%- if flags -%}
+              {%- set ns.l = ns.l + ['', '**Watch out for**'] -%}
+              {%- for f in flags -%}{%- set ns.l = ns.l + ['⚠ ' ~ f] -%}{%- endfor -%}
+              {%- endif -%}
+              {%- set ns.l = ns.l + ['', '**Where this came from**'] -%}
+              {%- if age is none -%}
+              {%- set ns.l = ns.l + ['⚠ *Never gathered*'] -%}
+              {%- else -%}
+              {%- set ns.l = ns.l + [('⚠ ' if age >= 7 else '') ~ '*Gathered ' ~ ('today' if age == 0 else (age ~ ' day' ~ ('s' if age != 1 else '') ~ ' ago')) ~ ', by hand*'] -%}
+              {%- endif -%}
+              {%- if src.get('ok') -%}{%- set ns.l = ns.l + ['Answered: ' ~ (src.ok | join(', '))] -%}{%- endif -%}
+              {%- if src.get('unavailable') -%}{%- set ns.l = ns.l + ['⚠ Could not check: ' ~ (src.unavailable | join(', '))] -%}{%- endif -%}
+              {%- set nh = state_attr(E,'needs_human') -%}
+              {%- if nh -%}{%- set ns.l = ns.l + [nh ~ ' item' ~ ('s' if nh != 1 else '') ~ ' need a person'] -%}{%- endif -%}
+              {{ ns.l | join('<br>') }}
+            card_mod: *personlist
+            grid_options: { columns: 12, rows: 12 }
