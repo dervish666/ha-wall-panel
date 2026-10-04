@@ -249,6 +249,8 @@ what is playing (art, title, a progress bar and wall-sized transport buttons), t
 and the things the family actually tap. Nothing is conditional and nothing changes height,
 so idle states are written into the templates.
 
+![Music](img/music.jpg)
+
 **One entity for every card.** No Lovelace card can template its entity, and a pair of
 conditional cards would cost grid rows ([trap
 15](07-traps.md#15-a-hidden-conditional-card-still-reserves-its-grid-rows)). So every card

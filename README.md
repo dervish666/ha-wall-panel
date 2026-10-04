@@ -4,7 +4,7 @@ A Home Assistant wall dashboard for a 10 inch touch panel. We built it on an ex-
 Crestron TSW-1060 with no Crestron processor anywhere in the house, and everything here also
 works on an ordinary wall tablet. The Crestron parts are clearly marked and you can skip them.
 
-![The Meadow view on the panel](docs/img/meadow.jpg)
+![The Meadow view with the demo household: a Saturday evening, music on, a party at the blue cottage](docs/img/meadow.jpg)
 
 What you get:
 
@@ -13,7 +13,8 @@ What you get:
   walk to school, the workshop builds whatever the printer is printing, a postie delivers
   notes typed on a phone, and everyone dances when music plays.
 - **Home**, the room the panel lives in. Lights, the TV, temperatures, energy, bin day.
-- **Music**, Music Assistant on the wall: now playing, a speaker picker, playlist tiles.
+- **Music**, Music Assistant on the wall: now playing, a speaker picker, playlist tiles
+  ([screenshot](docs/img/music.jpg)).
 - **Lights**, every light with a real brightness slider.
 - **Printer**, a 3D printer status page (Bambu Lab A1 Mini here, easy to drop).
 - **Today**, optional. A four-column family agenda with a person page behind each name. We
