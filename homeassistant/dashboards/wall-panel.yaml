@@ -7,10 +7,13 @@
 # configuration.example.yaml). It needs HACS: Mushroom and card-mod.
 #
 # Views, in side-key order: meadow (the family, landing view), today (the
-# family agenda), home (the room), lights, printer. Then the subviews: two
-# example person pages (person-alex, person-mia) and three detail pages
+# family agenda, optional), home (the room), music (Music Assistant,
+# optional), lights, printer (optional). Then the subviews: two example
+# person pages (person-alex, person-mia) and three detail pages
 # (detail-coming-up, detail-tomorrow, detail-school), all reached by tapping
-# a panel on Today.
+# a panel on Today. Delete Today and its subviews together if the Meadow is
+# enough; delete any optional view and take its path out of VIEWS in
+# www/crestron-keys.js.
 #
 # Every entity id below is a placeholder. Search for light., sensor., switch.,
 # media_player. and a1mini_SERIAL and swap in your own. The people are Alex,
@@ -45,7 +48,7 @@ views:
     theme: Wall Panel
     cards:
       - type: iframe
-        url: /local/meadow.html?v=9
+        url: /local/meadow.html?v=21
         card_mod:
           style: |
             ha-card {
@@ -558,6 +561,27 @@ views:
             tap_action: { action: more-info }
             grid_options: { columns: 12, rows: auto }
 
+          # Bin day, optional. sensor.bin_collections is days to the next
+          # collection, with a next_short list of what goes out
+          # (configuration.example.yaml has the shape). No reading is said out
+          # loud: a blank here would read as "none due". No such sensor? Delete
+          # this card.
+          - type: custom:mushroom-template-card
+            entity: sensor.bin_collections
+            primary: |-
+              {% set d = states('sensor.bin_collections') %}
+              {%- if d in ['unavailable','unknown'] %}Bins: no data
+              {%- elif d == '0' %}Bins out today
+              {%- elif d == '1' %}Bins out tomorrow
+              {%- else %}Bins in {{ d }} days{% endif %}
+            secondary: |-
+              {% set s = state_attr('sensor.bin_collections','next_short') %}
+              {{ s | join(', ') if s else 'The council lookup has not run' }}
+            icon: mdi:trash-can-outline
+            icon_color: "{{ '#E0705A' if states('sensor.bin_collections') in ['unavailable','unknown'] else '#E0A050' if states('sensor.bin_collections') | int(9) <= 1 else '#8D9BAA' }}"
+            tap_action: { action: more-info }
+            grid_options: { columns: 12, rows: auto }
+
       # ── Centre: this room ────────────────────────────────────────────────
       - type: grid
         cards:
@@ -675,6 +699,10 @@ views:
             card_mod: *title
             grid_options: { columns: 12, rows: auto }
 
+          # Two to a row: eight lights took this list past what the screen
+          # holds, and eight flat rows plus Lights off is more than 800px.
+          # Same flat cards, same tap and hold, half the width each. Names are
+          # short because a half tile clips at about eleven characters.
           - type: custom:mushroom-light-card
             entity: light.downstairs
             name: Hall
@@ -683,17 +711,17 @@ views:
             tap_action: { action: toggle }
             hold_action: { action: more-info }
             card_mod: *flat
-            grid_options: { columns: 12, rows: auto }
+            grid_options: { columns: 6, rows: auto }
 
           - type: custom:mushroom-light-card
             entity: light.front_porch
-            name: Front porch
+            name: Porch
             icon: mdi:outdoor-lamp
             use_light_color: false
             tap_action: { action: toggle }
             hold_action: { action: more-info }
             card_mod: *flat
-            grid_options: { columns: 12, rows: auto }
+            grid_options: { columns: 6, rows: auto }
 
           - type: custom:mushroom-entity-card
             entity: switch.sun_room
@@ -702,7 +730,7 @@ views:
             tap_action: { action: toggle }
             hold_action: { action: more-info }
             card_mod: *flat
-            grid_options: { columns: 12, rows: auto }
+            grid_options: { columns: 6, rows: auto }
 
           - type: custom:mushroom-light-card
             entity: light.upstairs
@@ -712,7 +740,7 @@ views:
             tap_action: { action: toggle }
             hold_action: { action: more-info }
             card_mod: *flat
-            grid_options: { columns: 12, rows: auto }
+            grid_options: { columns: 6, rows: auto }
 
           - type: custom:mushroom-light-card
             entity: light.bedroom
@@ -722,7 +750,37 @@ views:
             tap_action: { action: toggle }
             hold_action: { action: more-info }
             card_mod: *flat
-            grid_options: { columns: 12, rows: auto }
+            grid_options: { columns: 6, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.ivy_lamp
+            name: Ivy's lamp
+            icon: mdi:lightbulb-variant-outline
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            card_mod: *flat
+            grid_options: { columns: 6, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.ivy_main
+            name: Ivy's main
+            icon: mdi:ceiling-light-outline
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            card_mod: *flat
+            grid_options: { columns: 6, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.mia_main
+            name: Mia's
+            icon: mdi:ceiling-light-outline
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            card_mod: *flat
+            grid_options: { columns: 6, rows: auto }
 
           - type: custom:mushroom-template-card
             primary: Lights off
@@ -741,6 +799,316 @@ views:
                   margin-top: 8px;
                 }
             grid_options: { columns: 12, rows: auto }
+
+  # ── Music: Music Assistant on the wall ────────────────────────────────
+  # Two Music Assistant players, a speaker and the TV. Every card here reads ONE entity,
+  # media_player.music, a universal player in configuration.yaml that follows
+  # input_select.music_target, because no Lovelace card can template its
+  # entity (trap 15 again) and a hidden conditional would cost grid rows. Its
+  # art arrives through HA's media_player_proxy, same origin as the panel.
+  # Music Assistant's own services refuse the universal entity, so the tiles
+  # that start something call script.music_play, which picks the real player.
+  #
+  # Three columns, twelve rows each: what is playing, the speakers, and the
+  # things the family actually taps. Idle states are written into templates;
+  # nothing here is conditional and nothing changes height.
+  - title: Music
+    path: music
+    type: sections
+    max_columns: 3
+    theme: Wall Panel
+    sections:
+
+      # ── Left: now playing ──────────────────────────────────────────────
+      - type: grid
+        cards:
+          - type: custom:mushroom-legacy-template-card
+            entity: media_player.music
+            primary: |-
+              {# No `capitalize` here: it lowercases the rest, so 'the TV' came out 'The tv'. #}
+              {% set tv = is_state('input_select.music_target','TV') %}
+              {% set who = 'the TV' if tv else 'the speaker' %}
+              {% set Who = 'The TV' if tv else 'The speaker' %}
+              {% set st = states('media_player.music') %}
+              {%- if st == 'playing' %}Playing on {{ who }}
+              {%- elif st == 'paused' %}Paused on {{ who }}
+              {%- elif st in ['off','unavailable','unknown'] %}{{ Who }} is off
+              {%- else %}{{ Who }} is quiet{% endif %}
+            icon: ""
+            tap_action: { action: none }
+            card_mod:
+              style: |
+                ha-card {
+                  background: none !important;
+                  border: none !important;
+                  box-shadow: none !important;
+                  backdrop-filter: none !important;
+                  -webkit-backdrop-filter: none !important;
+                  padding: 14px 8px 0 8px;
+                  --card-primary-font-size: 22px;
+                  --card-primary-font-weight: 600;
+                }
+            grid_options: { columns: 12, rows: 1 }
+
+          # Art, title, artist and a live progress bar, all native. The icon
+          # button size is a custom property, so it crosses the shadow boundary
+          # where a selector would not (trap 6): wall-sized transport buttons.
+          # With nothing to show the card paints a slab of --primary-color
+          # (the theme's amber), which shouts across the room. While quiet the
+          # variable is re-pointed at the glass fill; while playing the card
+          # tints itself from the art and this rule stays out of the way.
+          - type: media-control
+            entity: media_player.music
+            card_mod:
+              style: |
+                ha-card {
+                  overflow: hidden;
+                  --mdc-icon-button-size: 64px;
+                  --mdc-icon-size: 40px;
+                  {% if states('media_player.music') not in ['playing','paused'] %}
+                  --primary-color: rgba(28,38,52,.55);
+                  {% endif %}
+                }
+            grid_options: { columns: 12, rows: 7 }
+
+          # Two cards, not one: Mushroom shows ONE control group at a time
+          # when both media and volume controls are configured, with a toggle
+          # to swap, and a wall wants both on screen. Prev and next appear
+          # only while something plays; idle shows the one button that works.
+          - type: custom:mushroom-media-player-card
+            entity: media_player.music
+            icon_type: none
+            primary_info: none
+            secondary_info: none
+            use_media_info: false
+            media_controls: [previous, play_pause_stop, next]
+            collapsible_controls: false
+            tap_action: { action: none }
+            hold_action: { action: more-info }
+            grid_options: { columns: 12, rows: 2 }
+
+          - type: custom:mushroom-media-player-card
+            entity: media_player.music
+            icon_type: none
+            primary_info: none
+            secondary_info: state
+            use_media_info: false
+            show_volume_level: true
+            volume_controls: [volume_set]
+            collapsible_controls: false
+            tap_action: { action: none }
+            hold_action: { action: more-info }
+            grid_options: { columns: 12, rows: 2 }
+
+      # ── Middle: the speakers ───────────────────────────────────────────
+      - type: grid
+        cards:
+          - type: custom:mushroom-title-card
+            title: Speakers
+            card_mod: *title
+            grid_options: { columns: 12, rows: 1 }
+
+          # Tap picks which speaker the left column and the quick starts drive.
+          # The chosen one is tinted the way Lights off is; the other dims.
+          - type: custom:mushroom-template-card
+            entity: media_player.kitchen_speaker
+            primary: Speaker
+            secondary: |-
+              {% set st = states('media_player.kitchen_speaker') %}
+              {%- if st == 'playing' %}{{ state_attr('media_player.kitchen_speaker','media_title') or 'Playing' }}
+              {%- elif st == 'paused' %}Paused
+              {%- elif st in ['off','unavailable','unknown'] %}Off
+              {%- else %}Quiet{% endif %}
+            icon: mdi:speaker
+            icon_color: "{{ '#E0A050' if is_state('input_select.music_target','Speaker') else '#8D9BAA' }}"
+            tap_action:
+              action: perform-action
+              perform_action: input_select.select_option
+              target: { entity_id: input_select.music_target }
+              data: { option: Speaker }
+            hold_action: { action: more-info }
+            card_mod:
+              style: |
+                ha-card {
+                  {% if is_state('input_select.music_target','Speaker') %}
+                  background-color: rgba(224,160,80,.12);
+                  border-color: rgba(224,160,80,.28);
+                  {% else %}
+                  opacity: .72;
+                  {% endif %}
+                }
+            grid_options: { columns: 12, rows: 2 }
+
+          - type: custom:mushroom-template-card
+            entity: media_player.living_room_tv_music
+            primary: TV
+            secondary: |-
+              {% set st = states('media_player.living_room_tv_music') %}
+              {%- if st == 'playing' %}{{ state_attr('media_player.living_room_tv_music','media_title') or 'Playing' }}
+              {%- elif st == 'paused' %}Paused
+              {%- elif st in ['off','unavailable','unknown'] %}Off
+              {%- else %}Quiet{% endif %}
+            icon: mdi:television
+            icon_color: "{{ '#E0A050' if is_state('input_select.music_target','TV') else '#8D9BAA' }}"
+            tap_action:
+              action: perform-action
+              perform_action: input_select.select_option
+              target: { entity_id: input_select.music_target }
+              data: { option: TV }
+            hold_action: { action: more-info }
+            card_mod:
+              style: |
+                ha-card {
+                  {% if is_state('input_select.music_target','TV') %}
+                  background-color: rgba(224,160,80,.12);
+                  border-color: rgba(224,160,80,.28);
+                  {% else %}
+                  opacity: .72;
+                  {% endif %}
+                }
+            grid_options: { columns: 12, rows: 2 }
+
+          # transfer_queue, the other player's queue onto the chosen one.
+          # script.music_bring_here works out which is which and does nothing
+          # when there is nothing to move, which the tile says up front.
+          - type: custom:mushroom-template-card
+            primary: |-
+              {% set tv = is_state('input_select.music_target','TV') %}
+              Bring it to {{ 'the TV' if tv else 'the speaker' }}
+            secondary: |-
+              {% set tv = is_state('input_select.music_target','TV') %}
+              {% set other = 'media_player.kitchen_speaker' if tv else 'media_player.living_room_tv_music' %}
+              {% set name = 'The speaker' if tv else 'The TV' %}
+              {%- if states(other) in ['playing','paused'] %}{{ name }} has {{ state_attr(other,'media_title') or 'something' }}
+              {%- else %}{{ name }} has nothing to move{% endif %}
+            icon: mdi:swap-horizontal
+            icon_color: |-
+              {% set other = 'media_player.kitchen_speaker' if is_state('input_select.music_target','TV') else 'media_player.living_room_tv_music' %}
+              {{ '#7FB77E' if states(other) in ['playing','paused'] else 'disabled' }}
+            tap_action:
+              action: perform-action
+              perform_action: script.music_bring_here
+            grid_options: { columns: 12, rows: 2 }
+
+          - type: custom:mushroom-template-card
+            primary: Stop the music
+            secondary: Both speakers go quiet
+            icon: mdi:stop-circle-outline
+            icon_color: "#E0A050"
+            tap_action:
+              action: perform-action
+              perform_action: media_player.media_stop
+              target:
+                entity_id:
+                  - media_player.kitchen_speaker
+                  - media_player.living_room_tv_music
+            card_mod: *lightsoff
+            grid_options: { columns: 12, rows: 2 }
+
+          - type: custom:mushroom-title-card
+            title: On air
+            card_mod: *title
+            grid_options: { columns: 12, rows: 1 }
+
+          # A radio station from your Music Assistant library: a tap tunes the
+          # chosen speaker to it. Swap the id for one of yours.
+          - type: custom:mushroom-template-card
+            primary: Radio
+            secondary: Your favourite station
+            icon: mdi:radio
+            icon_color: "#E0A050"
+            tap_action:
+              action: perform-action
+              perform_action: script.music_play
+              data: { media_id: "library://radio/1", media_type: radio }
+            grid_options: { columns: 12, rows: 2 }
+
+      # ── Right: one tap and it plays ────────────────────────────────────
+      # Swap in items from your own Music Assistant library: the ids come from
+      # music_assistant.get_library, and library://playlist/N stays stable
+      # until the playlist is deleted.
+      - type: grid
+        cards:
+          - type: custom:mushroom-title-card
+            title: Play something
+            card_mod: *title
+            grid_options: { columns: 12, rows: 1 }
+
+          - type: custom:mushroom-template-card
+            primary: Fresh
+            secondary: The latest hearted tracks
+            icon: mdi:heart-flash
+            icon_color: "#E0705A"
+            tap_action:
+              action: perform-action
+              perform_action: script.music_play
+              data: { media_id: "library://playlist/1", media_type: playlist }
+            grid_options: { columns: 12, rows: 2 }
+
+          - type: custom:mushroom-template-card
+            primary: Hearted tracks
+            secondary: Everything with a heart on it
+            icon: mdi:heart
+            icon_color: "#E0705A"
+            tap_action:
+              action: perform-action
+              perform_action: script.music_play
+              data: { media_id: "library://playlist/2", media_type: playlist }
+            grid_options: { columns: 12, rows: 2 }
+
+          - type: custom:mushroom-template-card
+            primary: Infinite mix
+            secondary: Endless, grown from the favourites
+            icon: mdi:infinity
+            icon_color: "#7FB1D8"
+            tap_action:
+              action: perform-action
+              perform_action: script.music_play
+              data: { media_id: "library://playlist/3", media_type: playlist }
+            grid_options: { columns: 12, rows: 2 }
+
+          - type: custom:mushroom-template-card
+            primary: Recently added
+            secondary: What is new in the library
+            icon: mdi:new-box
+            icon_color: "#7FB77E"
+            tap_action:
+              action: perform-action
+              perform_action: script.music_play
+              data: { media_id: "library://playlist/4", media_type: playlist }
+            grid_options: { columns: 12, rows: 2 }
+
+          - type: custom:mushroom-template-card
+            primary: Six O'Clock News
+            secondary: BBC Radio 4, the latest episode
+            icon: mdi:podcast
+            icon_color: "#8D9BAA"
+            tap_action:
+              action: perform-action
+              perform_action: script.music_play
+              data: { media_id: "library://podcast/1", media_type: podcast, latest_from: sensor.six_o_clock_news_latest }
+            grid_options: { columns: 12, rows: 2 }
+
+          # The one line that says where a tap will land.
+          - type: custom:mushroom-legacy-template-card
+            entity: input_select.music_target
+            primary: "Plays on {{ 'the TV' if is_state('input_select.music_target','TV') else 'the speaker' }} · tap a speaker to change"
+            icon: ""
+            tap_action: { action: none }
+            card_mod:
+              style: |
+                ha-card {
+                  background: none !important;
+                  border: none !important;
+                  box-shadow: none !important;
+                  backdrop-filter: none !important;
+                  -webkit-backdrop-filter: none !important;
+                  padding: 6px 8px 0 8px;
+                  --card-primary-font-size: 15px;
+                  --card-primary-font-weight: 500;
+                  --card-primary-color: rgba(233,238,243,.64);
+                }
+            grid_options: { columns: 12, rows: 1 }
 
   # ── Lights: the bulb key lands here ────────────────────────────────────
   # Reached by the side keys and URL only (the theme hides the view bar).
@@ -841,6 +1209,10 @@ views:
             card_mod: *title
             grid_options: { columns: 12, rows: auto }
 
+          # Two to a row: eight lights took this list past what the screen
+          # holds, and eight flat rows plus Lights off is more than 800px.
+          # Same flat cards, same tap and hold, half the width each. Names are
+          # short because a half tile clips at about eleven characters.
           - type: custom:mushroom-light-card
             entity: light.downstairs
             name: Hall
@@ -849,17 +1221,26 @@ views:
             tap_action: { action: toggle }
             hold_action: { action: more-info }
             card_mod: *flat
-            grid_options: { columns: 12, rows: auto }
+            grid_options: { columns: 6, rows: auto }
 
           - type: custom:mushroom-light-card
             entity: light.front_porch
-            name: Front porch
+            name: Porch
             icon: mdi:outdoor-lamp
             use_light_color: false
             tap_action: { action: toggle }
             hold_action: { action: more-info }
             card_mod: *flat
-            grid_options: { columns: 12, rows: auto }
+            grid_options: { columns: 6, rows: auto }
+
+          - type: custom:mushroom-entity-card
+            entity: switch.sun_room
+            name: Sun room
+            icon: mdi:sun-angle
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            card_mod: *flat
+            grid_options: { columns: 6, rows: auto }
 
           - type: custom:mushroom-light-card
             entity: light.upstairs
@@ -869,7 +1250,7 @@ views:
             tap_action: { action: toggle }
             hold_action: { action: more-info }
             card_mod: *flat
-            grid_options: { columns: 12, rows: auto }
+            grid_options: { columns: 6, rows: auto }
 
           - type: custom:mushroom-light-card
             entity: light.bedroom
@@ -879,16 +1260,37 @@ views:
             tap_action: { action: toggle }
             hold_action: { action: more-info }
             card_mod: *flat
-            grid_options: { columns: 12, rows: auto }
+            grid_options: { columns: 6, rows: auto }
 
-          - type: custom:mushroom-entity-card
-            entity: switch.sun_room
-            name: Sun room
-            icon: mdi:sun-angle
+          - type: custom:mushroom-light-card
+            entity: light.ivy_lamp
+            name: Ivy's lamp
+            icon: mdi:lightbulb-variant-outline
+            use_light_color: false
             tap_action: { action: toggle }
             hold_action: { action: more-info }
             card_mod: *flat
-            grid_options: { columns: 12, rows: auto }
+            grid_options: { columns: 6, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.ivy_main
+            name: Ivy's main
+            icon: mdi:ceiling-light-outline
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            card_mod: *flat
+            grid_options: { columns: 6, rows: auto }
+
+          - type: custom:mushroom-light-card
+            entity: light.mia_main
+            name: Mia's
+            icon: mdi:ceiling-light-outline
+            use_light_color: false
+            tap_action: { action: toggle }
+            hold_action: { action: more-info }
+            card_mod: *flat
+            grid_options: { columns: 6, rows: auto }
 
           - type: custom:mushroom-template-card
             primary: Lights off

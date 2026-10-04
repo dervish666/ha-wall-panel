@@ -1,6 +1,6 @@
 # 07 Traps
 
-Nineteen things that cost us time. Most are TSW-1060 specific, some bite on any Home
+Twenty-four things that cost us time. Most are TSW-1060 specific, some bite on any Home
 Assistant dashboard, and several fail silently while looking plausible, which is what makes
 them expensive. Each says what happens, why, and what to do.
 
@@ -100,6 +100,11 @@ worked. We took three screenshots of the wrong view before a probe page spelled 
 Run `BROWSERCLOSE`, wait about five seconds, then `BROWSEROPEN`. And turn off the
 open-browser automation while you do, or the launcher reopens the kiosk in the gap.
 
+Turn it back on afterwards, and check. If the panel reboots while the automation is off,
+the launcher fires its webhook into nothing and the panel sits on the launcher screen for
+good. Re-enable the automation, then run `shell_command.crestron_browser_open` by hand to
+get the browser back.
+
 ### 10. Hidden dashboard views are not routable
 
 A view with `visible: false` exists in the config, but the frontend refuses to route to it
@@ -144,6 +149,10 @@ unchanged.
 `custom:mushroom-legacy-template-card` ships in that bundle and honours all of them. Use
 it wherever size or colour matters. Light, media player and entity cards are unaffected.
 Read this before styling a card, not after screenshotting it.
+
+One more variable to set on the legacy card. Raise `--card-secondary-font-size` and the
+second line clips at the bottom, descenders first, because its line height stays sized for
+the old font. Set `--card-secondary-line-height` with it (we use `1.4`).
 
 ### 15. A hidden conditional card still reserves its grid rows
 
@@ -199,7 +208,64 @@ eats the waking tap. `STANDBY` and `STANDBY OFF` drive standby from the console,
 test without standing at the wall. How we proved it is in
 [04](04-hard-keys-and-backlight.md#why-not-standby).
 
-## Two habits that found most of these
+### 20. Chrome 87 ignores 8-digit hex colours, in CSS and on a canvas
+
+The panel's `WEBVIEW` engine treats `#RRGGBBAA` as invalid in both places we tried. In CSS
+the declaration is thrown away and the element keeps whatever came before. On a canvas it
+is worse: assigning an invalid string to `fillStyle` is silently ignored, so the shape
+paints in the **previous** fill colour. No error, no warning, just something drawn in a
+colour that belongs to the thing before it, which looks like a logic bug in the drawing
+code and is not one.
+
+Write alpha colours as `rgba()` everywhere the panel will see them. A desktop browser
+renders the hex form happily, so only the real screen catches this.
+
+### 21. A cross-origin iframe cannot dispatch events on the dashboard
+
+The Meadow forwards side keys and taps by calling `parent.document.dispatchEvent`, and
+opens views with `parent.history.pushState` plus `new parent.PopStateEvent("popstate")`.
+All of that works because `meadow.html` is served from Home Assistant's own origin. Move the
+page to another server and every one of those calls throws a security error, so the side
+keys stop panning while the iframe has focus, and the idle timer decides nobody is there.
+
+Relay through `postMessage` instead. The page posts to the parent with Home Assistant's
+origin as the target, and the listener in `crestron-keys.js` checks `e.origin` against
+`EMBED_ORIGIN` before it does anything, since any page can post a message. A same-origin page
+needs none of this. The page's half is in
+[06](06-views.md#a-page-from-another-server).
+
+### 22. Music Assistant refuses a universal media player
+
+A wall view wants one entity for every card, and no Lovelace card can template its entity.
+A `universal` media player that follows an `input_select` gives you that, and the core and
+Mushroom media cards drive it fine. But `music_assistant.play_media` and
+`music_assistant.transfer_queue` reject it, because it is not a Music Assistant player.
+
+So the cards read the universal player, and every tile that starts something calls a
+script that reads the same `input_select` and passes the real player to Music Assistant.
+`script.music_play` and `script.music_bring_here` in `scripts.example.yaml` are the worked
+examples.
+
+### 23. Music Assistant starts a podcast from the oldest unplayed episode
+
+Ask Music Assistant to play a podcast and it queues the oldest episode you have not heard.
+For a daily news programme that is last month's news. `play_media` has no option to start
+from the newest item.
+
+We read the feed ourselves. A REST sensor fetches the RSS, picks the item with the latest
+`pubDate` (not the first in the file, because feed order is not a promise) and keeps its
+enclosure URL as its state. The tile passes that sensor to `script.music_play`, which plays
+the URL as a track and falls back to the podcast if the sensor holds no URL. The sensor is
+in `configuration.example.yaml`.
+
+### 24. A command_line sensor with a unit rejects unknown
+
+Give a `command_line` sensor a `unit_of_measurement` and Home Assistant treats it as
+numeric. When its template returns `unknown`, which is the honest answer when there is no
+data, setup fails and the entity goes `unavailable` instead. The bin sensor did this. Leave
+the unit off, and let the dashboard template supply the words ("in 3 days").
+
+## Habits that found most of these
 
 **Look at the real screen.** `SCREENSHOT` writes a 1280x800 BMP to `/logs/ScreenShot.bmp`,
 and `tools/shot.sh` fetches it over SFTP, deletes it from the panel and hands back a small
@@ -210,3 +276,17 @@ width shows none of them.
 `BROWSEROPEN`, and have it post what it finds to a throwaway HTTP server on your computer.
 It is on Home Assistant's origin, so it can call `/auth/*` and the API directly.
 `glass-probe.html` and `camera-probe.html` are two of these.
+
+**Check animation in real time.** Headless Chrome's `--virtual-time-budget` fast-forwards
+timers, but it does not advance `requestAnimationFrame`, so an animated page like the Meadow
+renders its first frame and nothing after it. A screenshot taken that way shows a scene that
+never ran. Drive headless Chrome over the DevTools protocol instead, let the page run for
+real seconds, then read the console and take the screenshot. The Meadow's `?warm=N` hook
+runs N seconds of the simulation before the first frame, which saves some of the waiting.
+
+## One to watch
+
+The panel has rebooted itself twice, each time just after a burst of console commands and
+screenshots from a computer. We do not know the cause yet. Until we do, space out heavy
+console work, and remember trap 9:
+a reboot while the open-browser automation is off leaves the panel on the launcher.

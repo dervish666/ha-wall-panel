@@ -27,3 +27,115 @@ printer_pause_resume:
       - action: button.press
         target:
           entity_id: button.a1mini_SERIAL_resume
+
+# The postie's letters, and the Music view's two scripts. meadow_send_letter
+# writes input_text.meadow_letter; the music scripts need Music Assistant and
+# input_select.music_target. Both helpers are in configuration.example.yaml.
+# Change the recipient list to the names in PEOPLE in www/meadow.html.
+meadow_send_letter:
+  alias: 'Meadow: send a letter'
+  description: Pick who, type the note, press Run. The postie on the wall panel carries
+    it over.
+  icon: mdi:email-fast
+  mode: single
+  fields:
+    recipient:
+      name: To
+      description: Who the postie carries it to
+      required: true
+      default: House
+      selector:
+        select:
+          options:
+          - Alex
+          - Jo
+          - Rory
+          - Mia
+          - Ivy
+          - House
+          mode: dropdown
+    message:
+      name: Message
+      required: true
+      example: Tea's at 6
+      selector:
+        text: {}
+  sequence:
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.meadow_letter
+    data:
+      value: '{{ ((recipient | default(''House'')) ~ '': '' ~ (message | trim))[:state_attr(''input_text.meadow_letter'',''max'')
+        | int(255)] }}'
+music_play:
+  alias: 'Music: play something on the panel''s speaker'
+  description: 'The wall panel''s quick-start tiles. A Lovelace tap_action cannot
+    template its target, so the tile passes what to play and this picks where:
+    input_select.music_target, Speaker or TV, both Music Assistant players. Replaces
+    the queue, so a tap always gets what it asked for.'
+  icon: mdi:play-circle-outline
+  mode: single
+  fields:
+    media_id:
+      name: Media
+      description: A Music Assistant URI, library://playlist/1 and the like
+      required: true
+      example: library://playlist/1
+      selector:
+        text: {}
+    media_type:
+      name: Type
+      required: true
+      default: playlist
+      selector:
+        select:
+          options:
+          - playlist
+          - radio
+          - podcast
+          - album
+          - track
+          - artist
+          - audiobook
+    latest_from:
+      name: Latest episode sensor
+      description: Optional. A sensor whose state is the newest episode's audio URL.
+        Music Assistant queues a podcast from its oldest unplayed episode, so a tile
+        that wants the latest one names this sensor, and media_id becomes the fallback
+        for when the feed is down.
+      required: false
+      example: sensor.six_o_clock_news_latest
+      selector:
+        entity:
+          domain: sensor
+  sequence:
+  - variables:
+      player: "{{ 'media_player.living_room_tv_music' if is_state('input_select.music_target','TV') else 'media_player.kitchen_speaker' }}"
+      latest: "{{ states(latest_from) if latest_from is defined and latest_from else '' }}"
+      use_latest: "{{ latest.startswith('http') }}"
+  - action: music_assistant.play_media
+    target:
+      entity_id: '{{ player }}'
+    data:
+      media_id: '{{ latest if use_latest else media_id }}'
+      media_type: "{{ 'track' if use_latest else media_type }}"
+      enqueue: replace
+music_bring_here:
+  alias: 'Music: bring the queue to the chosen speaker'
+  description: 'Moves whatever the OTHER Music Assistant player is playing onto the one
+    input_select.music_target names, and carries on playing. Does nothing when the
+    other player is silent; the panel tile says so before you tap.'
+  icon: mdi:swap-horizontal
+  mode: single
+  sequence:
+  - variables:
+      target: "{{ 'media_player.living_room_tv_music' if is_state('input_select.music_target','TV') else 'media_player.kitchen_speaker' }}"
+      source: "{{ 'media_player.kitchen_speaker' if is_state('input_select.music_target','TV') else 'media_player.living_room_tv_music' }}"
+  - condition: template
+    value_template: "{{ states(source) in ['playing', 'paused'] }}"
+  - action: music_assistant.transfer_queue
+    target:
+      entity_id: '{{ target }}'
+    data:
+      source_player: '{{ source }}'
+      auto_play: true

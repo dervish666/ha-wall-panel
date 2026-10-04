@@ -69,6 +69,44 @@ Taps inside the Meadow never reach the dashboard page, because the Meadow is an 
 `pointerdown`, and `crestron-keys.js` counts that as activity. It also forwards the side
 keys up to the parent, so up and down still pan while the Meadow has focus.
 
+## Keys from a page on another server
+
+The Meadow can dispatch straight onto the dashboard document because it is served from
+Home Assistant's own origin. An iframe from any other origin cannot: touching
+`parent.document` throws a security error
+([trap 21](07-traps.md#21-a-cross-origin-iframe-cannot-dispatch-events-on-the-dashboard)).
+So `crestron-keys.js` has a small `postMessage` relay at the bottom.
+
+- `EMBED_ORIGIN` is the one origin it listens to, scheme and port included, for example
+  `"http://192.168.1.60:8137"`. It is `null` by default, which leaves the relay off.
+- A message from any other origin is dropped, because any page can post one.
+- `{ type: "crestron-activity" }` becomes a `crestron-activity` event, so the idle and
+  backlight timers see the tap.
+- `{ type: "crestron-key", event: "keydown", key, code }` becomes a real `KeyboardEvent` on
+  the dashboard document, and the normal handler maps it. Only `keydown`, `keyup` and
+  `keypress` are accepted.
+
+The embedded page's half, about a dozen lines, is in
+[06](06-views.md#a-page-from-another-server). Only one origin is supported. A second
+embedded server would need `EMBED_ORIGIN` turned into a list.
+
+## The Meadow's buildings
+
+Tapping a building in the Meadow opens a view: the cottage opens Home, the bandstand Music,
+the workshop Printer, and the office robot an Office view if you have one. The map is
+`VIEW` in the Meadow's CONFIG block, and `null` leaves a building as scenery.
+
+It uses the same trick as the side keys. `goView()` in `meadow.html` calls
+`parent.history.pushState(null, "", path)` and then dispatches
+`new parent.PopStateEvent("popstate")` on the parent window, and Home Assistant's router
+moves to the view without a reload. The event is built from the parent window's own
+`PopStateEvent`, so it belongs to the document it is dispatched on. It only works because
+the Meadow is same-origin with the dashboard. Opened on its own, outside the dashboard, a tap logs a warning to the console
+and does nothing.
+
+A tap on a building is a touch on the page, so it counts as activity like any other, and
+the idle return will bring the panel back to the Meadow five minutes later.
+
 ## Why not standby
 
 The panel has its own standby (`STBYTO`, in minutes). It looks like the obvious way to dark

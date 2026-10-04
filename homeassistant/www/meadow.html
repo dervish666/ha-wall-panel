@@ -35,6 +35,23 @@ canvas#world { display: block; position: fixed; left: 0; top: 0; touch-action: n
   font-size: 19px; color: var(--hud-soft); }
 #status { color: var(--warn); font-weight: 500; margin-top: 6px; }
 
+/* Countdowns: a row of tags in the sky between the clock and the corner hint, the
+   same white pill with a coloured rim and a number badge as the name tags on the
+   canvas, so "Mia 31" reads the same way "Jo 3" does. Fixed colours, not the
+   HUD variables: the pills stay white at night like the tags do. */
+#dates { position: fixed; left: 390px; right: 340px; top: 32px; height: 40px; display: flex;
+  align-items: flex-start; overflow: hidden; pointer-events: none; }
+.dchip { flex: none; display: flex; align-items: center; height: 36px; margin-right: 12px;
+  padding: 0 5px 0 10px; border-radius: 999px; box-sizing: border-box;
+  background: rgba(255, 255, 255, .95); border: 2.5px solid #999;
+  font: 600 18px Fredoka, sans-serif; color: #26352C; white-space: nowrap; }
+.dchip:last-child { margin-right: 0; }
+.dchip .dic { width: 22px; height: 22px; margin-right: 7px; flex: none; }
+.dchip .dn { margin-left: 8px; min-width: 24px; height: 24px; padding: 0 7px; border-radius: 999px;
+  color: #fff; font-size: 15px; line-height: 24px; text-align: center; box-sizing: border-box; }
+.dchip.now { animation: dbob 1.4s ease-in-out infinite; }
+@keyframes dbob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+
 #scrim { position: fixed; left: 0; top: 0; right: 0; bottom: 0; background: var(--scrim);
   display: flex; align-items: center; justify-content: center; opacity: 0;
   pointer-events: none; transition: opacity .22s ease-out; }
@@ -73,12 +90,13 @@ canvas#world { display: block; position: fixed; left: 0; top: 0; touch-action: n
 .tt td.pe { box-shadow: inset 0 0 0 2px #7FB77E; }
 #next { transition: opacity .6s; }
 .foot .bad { color: var(--warn); }
-@media (prefers-reduced-motion: reduce) { #card, #scrim { transition: none; } }
+@media (prefers-reduced-motion: reduce) { #card, #scrim { transition: none; } .dchip.now { animation: none; } }
 </style>
 </head>
 <body>
 <canvas id="world"></canvas>
 <div id="hud"><div id="clock">--:--</div><div id="date"></div><div id="next"></div></div>
+<div id="dates"></div>
 <div id="corner"><div>Tap someone to see their week</div><div id="status"></div></div>
 <div id="scrim"><section id="card">
   <div id="face"><canvas id="portrait" width="480" height="480"></canvas>
@@ -126,7 +144,13 @@ var SENSORS = {
   kit: "sensor.ivy_school_kit",          // what kit is needed today
   lunch: "sensor.ivy_lunch",             // the school lunch menu, today and tomorrow
   sun: "sun.sun",
-  weather: "weather.forecast_home"
+  weather: "weather.forecast_home",
+  // Optional extras. null switches that part of the meadow off and nothing else.
+  printer: null,                      // e.g. "sensor.a1mini_SERIAL_": a Bambu Lab printer's sensor prefix (ha-bambulab); the workshop builds the print
+  letter: "input_text.meadow_letter", // the postie's letters, typed on a phone as "Ivy: tea's at six"
+  music: "media_player.music",        // the speaker: the meadow dances while it plays music
+  rain: null,                         // e.g. "sensor.rain_sensor": adds rain the forecast misses (see RAIN_STATES)
+  trips: "calendar.family"            // events titled "Holiday ..." on this calendar become countdowns
 };
 // Whose card the optional school sensors belong to.
 var SCHOOL_WHO = { timetable: "Mia", kit: "Ivy", lunch: "Ivy" };
@@ -134,14 +158,44 @@ var SCHOOL_WHO = { timetable: "Mia", kit: "Ivy", lunch: "Ivy" };
 // person whose card should say "couldn't check", so a missing source does not read
 // as a quiet week. The House card lists every missing source.
 var SOURCE_OWNER = [[/jo-mail/, "Jo"], [/high-school/, "Rory"], [/primary/, "Ivy"], [/academy/, "Mia"]];
+// The order the school kids stand in at the school door, front to back. Put the
+// tallest name tag (highest tg) first so the tags open out rather than overlap.
+var SCHOOL_LINE = ["Rory", "Ivy", "Mia"];
+// What the rain sensor's states mean (SENSORS.rain). Anything else is no reading.
+var RAIN_STATES = { wet: ["raining", "wet", "on"], dry: ["none", "dry", "off"] };
+// Countdowns in the sky. Birthdays are month-day and must use names from PEOPLE;
+// each one throws the party on the day. The fixed days work for anyone.
+var DATES = {
+  birthdays: { Alex: "03-14", Jo: "06-02", Rory: "01-22", Mia: "10-09", Ivy: "07-27" },
+  fixed: [
+    { key: "halloween", label: "Halloween", icon: "pumpkin", md: "10-31", rave: "halloween", party: "Happy Halloween!" },
+    { key: "bonfire", label: "Bonfire night", icon: "fire", md: "11-05", rave: "bonfire", party: "Bonfire night!" },
+    { key: "christmas", label: "Christmas", icon: "tree", md: "12-25", rave: "christmas", party: "Merry Christmas!" },
+    { key: "nye", label: "New Year's Eve", icon: "sparkle", md: "12-31", rave: "new years eve", party: "Happy New Year!" }
+  ]
+};
+// Tap shortcuts: a building opens its own dashboard view. null leaves that
+// building as scenery. Paths are views in dashboards/wall-panel.yaml.
+var VIEW = { home: "/wall-panel/home", music: "/wall-panel/music", printer: "/wall-panel/printer", office: null };
+// The office robot: a URL that answers GET with an agent office's state as JSON,
+// cross-origin (docs/06-views.md, "A page from another server"). null keeps the
+// robot out of the meadow entirely, which is what you want unless you run one.
+var OFFICE_URL = null;
 // ── end of CONFIG ───────────────────────────────────────────────────────────
 
 var Q = location.search;
 var DEMO = location.protocol === "file:" || /[?&]demo\b/.test(Q);
 var HOUR = (Q.match(/[?&]hour=([\d.]+)/) || [])[1];          // test hook: fake the clock
+var DATE = (Q.match(/[?&]date=(\d{4}-\d\d-\d\d)/) || [])[1];  // test hook: fake the day (countdowns, parties, school days); pair with hour=
 var OPEN = (Q.match(/[?&]open=(\w+)/) || [])[1];             // test hook: open a card
 var WFORCE = (Q.match(/[?&]weather=(\w+)/) || [])[1];        // test hook: sunny|partly|cloudy|rain|storm|fog|snow|windy
-var PFORCE = (Q.match(/[?&]party=([\w-]+)/) || [])[1];       // test hook: a name from PEOPLE, or halloween|bonfire|christmas
+var PFORCE = (Q.match(/[?&]party=([^&]+)/) || [])[1];         // test hook: a name from PEOPLE (any case), or halloween|bonfire|christmas|anniversary for the rave, friend or friend:Pat for the house party, comma-joined for both
+var PRFORCE = (Q.match(/[?&]printer=([\w:.]+)/) || [])[1];    // test hook: running:45 | pause:45 | prepare | finish | failed | idle | offline
+var LFORCE = (Q.match(/[?&]letter=([^&]+)/) || [])[1];        // test hook: Ivy:hello (url-encoded), delivered a few seconds after boot
+var FPS = /[?&]fps\b/.test(Q);                               // test hook: frame rate and per-frame JS time, bottom right
+var MFORCE = (Q.match(/[?&]music=(\w+)/) || [])[1];          // test hook: on | off, overrides the speaker
+var OFORCE = (Q.match(/[?&]office=([^&]+)/) || [])[1];         // test hook: off (unreachable) | quiet | ask:Name | Name:what it is doing (url-encoded), overrides the office poll
+var WARM = +(Q.match(/[?&]warm=([\d.]+)/) || [])[1] || 0;      // test hook: run this many seconds of the sim before the first frame (headless screenshots see fades finished, guests arrived)
 
 // ── Small helpers ───────────────────────────────────────────────────────────
 function rgb(h) { var v = parseInt(h.slice(1), 16); return [v >> 16, (v >> 8) & 255, v & 255]; }
@@ -164,6 +218,7 @@ var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oc
 var MONTHS_LONG = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 function now() {
   var d = new Date();
+  if (DATE) d.setFullYear(+DATE.slice(0, 4), +DATE.slice(5, 7) - 1, +DATE.slice(8, 10));
   if (HOUR) { var h = parseFloat(HOUR); d.setHours(h | 0, Math.round((h % 1) * 60), 0, 0); }
   return d;
 }
@@ -786,6 +841,10 @@ function layout() {
     bus:     { x: Math.round(W * 0.715), y: R + 16 },
     cottage: { x: Math.round(W * 0.79),  y: B },
     mill:    { x: Math.round(W * 0.905), y: B },
+    // The printer's workshop goes on the cottage's back plot, below it and left of
+    // the woodcutter: the one patch the village had not used. The family patch
+    // starts just below its zone.
+    shop:    { x: Math.round(W * 0.79),  y: TOP + 172 },
     school:  { x: Math.round(W * 0.075), y: TOP + 190 },
     swing:   { x: Math.round(W * 0.05),  y: H - 160 },
     wood:    { x: Math.round(W * 0.9),   y: TOP + 175 },
@@ -813,7 +872,8 @@ function layout() {
     { x: L.garden.x + 20, y: L.garden.y - 8, rx: 140, ry: 52 },
     { x: L.band.x, y: L.band.y - 22, rx: 92, ry: 58 },
     { x: L.pitch.x, y: L.pitch.y, rx: 128, ry: 50 },
-    { x: L.fish.x - 10, y: L.fish.y, rx: 46, ry: 30 }];
+    { x: L.fish.x - 10, y: L.fish.y, rx: 46, ry: 30 },
+    { x: L.shop.x, y: L.shop.y - 16, rx: 74, ry: 46 }];                 // the workshop plot
 }
 function inZone(x, y, pad) {
   for (var i = 0; i < ZONES.length; i++) { var z = ZONES[i], dx = (x - z.x) / (z.rx + pad), dy = (y - z.y) / (z.ry + pad);
@@ -966,6 +1026,12 @@ function paintProps(g) {
   g.beginPath(); g.ellipse(x, y, 16, 10, 0, 0, 7); g.stroke();
   g.lineWidth = 3; [-1, 1].forEach(function (s) { g.beginPath(); g.moveTo(x + s * 104, y - 14); g.lineTo(x + s * 112, y - 14);
     g.lineTo(x + s * 112, y + 14); g.lineTo(x + s * 104, y + 14); g.stroke(); });
+
+  x = L.shop.x; y = L.shop.y;                                       // the workshop plot: bare earth and a few fence posts
+  g.fillStyle = "rgba(196,166,118,.55)"; rr(g, x - 58, y - 46, 116, 56, 14); g.fill();
+  g.fillStyle = "rgba(150,120,80,.35)"; for (i = 0; i < 14; i++) { g.beginPath(); g.arc(x + rand(-50, 50), y + rand(-38, 4), rand(1.5, 3), 0, 7); g.fill(); }
+  g.fillStyle = "#A87A50"; [-62, -44, 46, 64].forEach(function (o) { g.fillRect(x + o - 2, y - 22, 4, 20); });
+  g.fillRect(x - 62, y - 14, 20, 2.5); g.fillRect(x + 44, y - 14, 20, 2.5);
 }
 
 function depth(y) { return 0.8 + 0.2 * Math.max(0, Math.min(1, (y - TOP) / (H - TOP))); }
@@ -998,11 +1064,11 @@ function setup() {
   for (i = 0; i < 2; i++) spawn("nib", { r: 25, spr: FOX, speed: 30 });
   fam = PEOPLE.map(function (p, i) {                         // spread out along the meadow
     return spawn("fam", { r: p.r, spr: makeSprites(p), rig: bakeRig(p), person: p, speed: p.look === "snail" ? 11 : 26, hunger: rand(0, 0.4) },
-      W * (0.26 + (i % 3) * 0.24), i < 3 ? TOP + 150 : H - 200);
+      W * (0.24 + (i % 3) * 0.22), i < 3 ? TOP + 150 : H - 200);           // clear of the workshop plot on the right
   });
   BEE_HOST = fam.filter(function (t) { return t.person.bee; })[0] || null;
   for (i = 0; i < 26; i++) addFood();
-  ICON = makeIcons(); BUBS = makeBubbles(); MFRONT = marketFront(); VILLAGE = makeVillage(); PLANE = planeSprite(); makeWeatherSprites();
+  ICON = makeIcons(); BUBS = makeBubbles(); MFRONT = marketFront(); SHOP = makeShop(); VILLAGE = makeVillage(); PLANE = planeSprite(); makeWeatherSprites();
   flies = []; for (i = 0; i < 16; i++) flies.push({ x: rand(0, W), y: rand(HZ, H), a: rand(0, 6), s: rand(0.4, 1) });
 }
 function addFood() { var p = spot(); food.push({ x: p.x, y: p.y, spr: FOOD_SPR[Math.random() < 0.3 ? 1 : 0], grow: 0 }); }
@@ -1030,17 +1096,19 @@ function go(t, x, y) { t.tx = x; t.ty = y; t.idle = false; }
 // One step toward (tx, ty). A step that would enter a zone slides along its edge
 // instead, so nothing ever bounces off a scene. Returns true on arrival, or when
 // boxed in, which hands the creature to the idle branch to plan somewhere else.
+// t.pass (a duty: school, the pitch, the bus stop) walks straight through zones;
+// when the duty ends the "walk straight out" branch below brings them back.
 function steer(t, speed, dt) {
   var dx = t.tx - t.x, dy = t.ty - t.y, d = Math.sqrt(dx * dx + dy * dy);
   if (d < 2) return true;
-  var st = Math.min(d, speed * dt), ux = dx / d, uy = dy / d, pad = t.r * 0.6;
-  if (inZone(t.tx, t.ty, pad)) return true;             // unreachable goal: hand back to the planner
-  var inside = inZone(t.x, t.y, pad * 0.5), nx, ny, z;
+  var st = Math.min(d, speed * dt), ux = dx / d, uy = dy / d, pad = t.r * 0.6, mind = !t.pass;
+  if (mind && inZone(t.tx, t.ty, pad)) return true;     // unreachable goal: hand back to the planner
+  var inside = mind ? inZone(t.x, t.y, pad * 0.5) : null, nx, ny, z;
   if (inside) {                                         // spawned or knocked inside: walk straight out
     var ox = t.x - inside.x, oy = t.y - inside.y, ol = Math.sqrt(ox * ox + oy * oy) || 1;
     nx = t.x + ox / ol * st; ny = t.y + oy / ol * st;
   } else {
-    nx = t.x + ux * st; ny = t.y + uy * st; z = inZone(nx, ny, pad);
+    nx = t.x + ux * st; ny = t.y + uy * st; z = mind ? inZone(nx, ny, pad) : null;
     if (z) {
       var ax = z.rx + pad, ay = z.ry + pad, gx = (nx - z.x) / (ax * ax), gy = (ny - z.y) / (ay * ay), gl = Math.sqrt(gx * gx + gy * gy) || 1;
       var sx = -gy / gl, sy = gx / gl;
@@ -1067,6 +1135,18 @@ function wanderSpot(t) {
 // (A pass/fail test with a random fallback put them on top of each other whenever
 // the patch was busy, which with six of them is most of the time.)
 function famSpot(t) {
+  // A duty first: school, a club, or out through the bus stop. See dutyFor.
+  var duty = t.duty = dutyFor(t);
+  if (duty) {
+    t.pass = true;
+    if (duty.where !== "away") return dutySpot(t, duty);
+    var bus = { x: LAY.bus.x - 36, y: LAY.R + 14 };
+    if (t.gone) return { x: t.x, y: t.y };                                  // out, and staying out until it is over
+    if (Math.abs(t.x - bus.x) < 30 && Math.abs(t.y - bus.y) < 20) { t.gone = true; return { x: W + 55, y: LAY.R }; }
+    return bus;                                                             // first the road, then the stop
+  }
+  if (t.gone) { t.gone = false; t.pass = true; return { x: LAY.bus.x - 36, y: LAY.R + 14 }; }   // back off the bus
+  t.pass = false;
   // The swimmers head for the pond bank now and then; more often if the other one is already in.
   var look = t.person.look;
   if (look === "shark" || look === "otter") {
@@ -1086,6 +1166,79 @@ function famSpot(t) {
   }
   return best;
 }
+
+// ── The day ─────────────────────────────────────────────────────────────────
+// Where someone should be right now, from the data and nothing else. A duty is
+// { where: school | pond | pitch | band | away, what }. School hours on a school
+// day send the three kids to the school; a timed calendar event sends its owner to
+// the matching scene, or out along the road to the bus stop when it is somewhere
+// else (work, the dentist, a shift). Twenty minutes to get there, an hour there,
+// since the calendar sensor carries no end time. All-day events move nobody: they
+// are mostly notes ("Bin day"). No data, or data that cannot say, is no duty: they
+// stay in the meadow rather than act out a guess.
+var SCHOOL_OUT = false;                       // the village school's break, set by its scene
+function weekday(d) { return d.getDay() >= 1 && d.getDay() <= 5; }
+// true = school day, false = no school, null = cannot tell.
+function schoolDay(name, d) {
+  if (!weekday(d)) return false;
+  var S = DATA.school || {}, td = ymd(d);
+  // The optional school sensors answer first for the kid they belong to (SCHOOL_WHO).
+  if (name === SCHOOL_WHO.timetable && S.timetable && typeof S.timetable.open_today === "boolean") return S.timetable.open_today;
+  if (name === SCHOOL_WHO.lunch && S.lunch) { var st = S.lunch.status_today; if (st === "served") return true; if (st === "closed") return false; }
+  // Otherwise the term dates in SENSORS.extra.
+  var sc = ((DATA.extra || {}).schools || []).filter(function (s) { return s.who === name; })[0];
+  if (!sc || !sc.terms) return null;
+  if ((sc.days || []).some(function (x) { return x.date === td; })) return false;
+  // In term needs a known end still ahead; out of term needs a known gap either
+  // side. Some schools publish half their dates, and an open-ended term is an
+  // unknown, not a yes: Christmas must not show anyone at school.
+  var prevEnd = null, nextStart = null, inTerm = false, open = false;
+  sc.terms.forEach(function (t) {
+    if (t.to && t.to >= td && (!t.from || t.from <= td)) inTerm = true;
+    if (t.from && t.from <= td && !t.to) open = true;
+    if (t.to && t.to < td && (!prevEnd || t.to > prevEnd)) prevEnd = t.to;
+    if (t.from && t.from > td && (!nextStart || t.from < nextStart)) nextStart = t.from;
+  });
+  if (inTerm) return true;
+  if (!open && prevEnd && nextStart) return false;
+  return null;
+}
+var PLACE = [[/swim/i, "pond"], [/football|rugby|match|training/i, "pitch"], [/\bband\b|drama|music|choir|cubs|scouts|beavers|club|rehears/i, "band"]];
+function placeFor(what) {
+  if (/book club/i.test(what)) return "away";                      // at someone's house, not the bandstand
+  for (var i = 0; i < PLACE.length; i++) if (PLACE[i][0].test(what)) return PLACE[i][1];
+  return "away";
+}
+function dutyFor(t) {
+  var name = t.person.name, d = now(), m = d.getHours() * 60 + d.getMinutes(), td = ymd(d);
+  if (KIDS.indexOf(name) >= 0 && m >= 8 * 60 + 35 && m < 15 * 60 + 15 && schoolDay(name, d) === true) return { where: "school", what: "School" };
+  for (var i = 0; i < DATA.events.length; i++) { var e = DATA.events[i];
+    if (e.who !== name || e.day !== td || e.all_day || !e.start) continue;
+    var s = new Date(e.start), em = s.getHours() * 60 + s.getMinutes();
+    if (!isNaN(em) && m >= em - 20 && m < em + 60) return { where: placeFor(e.what), what: e.what };
+  }
+  return null;
+}
+// A standing spot for a duty. slot spreads people sharing a scene apart: the
+// school's are fixed per kid (SCHOOL_LINE), the rest by who is there.
+function dutySpot(t, duty) {
+  var L = LAY, slot = fam.filter(function (o) { return o.duty && o.duty.where === duty.where; }).indexOf(t);
+  if (slot < 0) slot = 0;
+  switch (duty.where) {
+    // A staggered line down the school front: 80 apart across and 50 down, which
+    // is what it takes for three bodies and three name tags to never overlap at
+    // 1280x800 (a row along the door stacked them). In the example household the
+    // deer's tag rides highest (tg 2.75) and the shark's lowest (1.6), so that order opens the
+    // gaps rather than closing them. Break shuffles it out into the yard a little.
+    case "school": var s = L.school, k = Math.max(0, SCHOOL_LINE.indexOf(t.person.name)), o = SCHOOL_OUT ? 22 : 0;
+      return { x: s.x - 36 + k * 80 + o, y: s.y + 14 + k * 50 + o * 0.4 };
+    case "pond": return { x: W * 0.74 + slot * 60, y: H - 172 };                            // the bank; the swimmers dive from here
+    case "pitch": return { x: L.pitch.x - 90 + slot * 60, y: L.pitch.y - 40 };              // the touchline, behind the players
+    case "band": return { x: L.band.x + 96 + slot * 40, y: L.band.y - 14 - slot * 26 };     // beside the bandstand, inside the dance radius
+  }
+  return { x: t.x, y: t.y };
+}
+function offStage(t) { return t.x > W + 20; }
 
 // ── The rig: which pieces, where they pivot, how they move ──────────────────
 // order is the draw order. piv is each piece's pivot relative to the feet, in body
@@ -1283,6 +1436,7 @@ function update(dt) {
   for (i = 0; i < VILLAGE.length; i++) VILLAGE[i].update(dt, asleep);
   updateParty(dt);
   updatePlane(dt);
+  updateRobot(dt);
   if (Math.random() < dt * 1.1 && food.length < 34) addFood();
   for (i = 0; i < food.length; i++) food[i].grow = Math.min(1, food[i].grow + dt * 2.5);
 
@@ -1342,7 +1496,7 @@ function update(dt) {
           if (dist(t, t.chase) < (t.r + t.chase.r) * 0.75) eat(t, t.chase); }
       }
     } else if (t.kind === "fam") {
-      if (t.munch <= 0 && t.hunger > 0.7 && t.idle && t.wait <= 0 && !t.target) {
+      if (t.munch <= 0 && t.hunger > 0.7 && t.idle && t.wait <= 0 && !t.target && !t.duty) {
         var ff = nearest(food, t, 300, function (f) { if (!inBounds(f.x, f.y, true)) return false;
           for (var q = 0; q < fam.length; q++) if (fam[q] !== t && Math.hypot(fam[q].x - f.x, (fam[q].y - f.y) * 1.6) < 130) return false;
           return true; });
@@ -1351,10 +1505,12 @@ function update(dt) {
       t.ycool -= dt;
       animalHabits(t, dt);
       famLife(t, dt, asleep, nibs);
-      if (t.idle && t.wait > 0 && !t.yielding) for (j = 0; j < fam.length; j++) if (fam[j] !== t && Math.hypot(fam[j].x - t.x, (fam[j].y - t.y) * 1.6) < 120) t.wait = 0;
+      // (Neither rule while on a duty: three kids lined up at the school door are
+      // meant to be close, and would otherwise re-plan every frame.)
+      if (t.idle && t.wait > 0 && !t.yielding && !t.duty) for (j = 0; j < fam.length; j++) if (fam[j] !== t && Math.hypot(fam[j].x - t.x, (fam[j].y - t.y) * 1.6) < 120) t.wait = 0;
       // Walking into someone: stop for a beat and re-plan. A state change, not a push,
       // and a cooldown after, or two of them yield to each other in a loop.
-      if (!t.idle && !t.target && t.ycool <= 0) for (j = 0; j < fam.length; j++) { var o = fam[j]; if (o === t) continue;
+      if (!t.idle && !t.target && t.ycool <= 0 && !t.duty) for (j = 0; j < fam.length; j++) { var o = fam[j]; if (o === t) continue;
         var ox = o.x - t.x, oy = o.y - t.y;
         if (Math.hypot(ox, oy * 1.6) < 95 && ox * (t.tx - t.x) + oy * (t.ty - t.y) > 0) { t.idle = true; t.wait = rand(0.4, 0.8); t.yielding = true; t.ycool = 3; break; } }
     }
@@ -1373,7 +1529,7 @@ function update(dt) {
       if (t.wait <= 0 && t.munch <= 0) {
         var s = t.kind === "fam" ? famSpot(t) : wanderSpot(t);
         go(t, s.x, s.y); t.target = null; t.yielding = false;
-        t.wait = rand(1, t.kind === "fam" ? 5 : 3.5);
+        t.wait = rand(1, t.kind === "fam" ? 5 : 3.5) * (MUSIC_T > 0.5 ? 2.5 : 1);   // with music on they stop to dance for longer
       }
     } else {
       t.moving = true;
@@ -1404,7 +1560,7 @@ function eat(n, p) {
 // other, queue at the well, the stall and the bus stop, and the pub lets them out
 // wobbly. Villagers are never tapped and never eaten. Each scene is
 // { layer: "back" | "front" | null, update(dt, asleep), draw(time, asleep), light?(a) }.
-var VILLAGE = [], WALKERS = [], QS = {}, DOORS = {}, ICON, BUBS, MFRONT, VSPR = {}, clockT = 0, DANCE = null;
+var VILLAGE = [], WALKERS = [], QS = {}, DOORS = {}, ICON, BUBS, MFRONT, SHOP, VSPR = {}, clockT = 0, DANCE = null, POSTIE = { busy: false };
 var VCOLS = ["#F6C28B", "#F3DE7C", "#BCD98A", "#EDB3A8", "#D9C6A5", "#F29E8E", "#F7CFD8", "#E4B363", "#C9DDB0", "#E8C3A0"];
 var HATS = ["none", "none", "none", "beanie", "beanie2", "straw", "cap"];
 var UMBS = ["#E86A5B", "#3B5FA8", "#F3C24B", "#4E9A5A", "#E68AB0"];
@@ -1437,13 +1593,13 @@ function walkV(v, tx, ty, speed, dt) {
   v.phase += st / (v.r * 0.9); return false;
 }
 function hopV(v) { return Math.abs(Math.sin(v.phase)) * v.r * 0.45 * depth(v.y) * (v.gait || 0); }
-function drawV(v, asleep, air, rot) {
-  var sc = depth(v.y), sw = v.r * 2.4 * sc;
+function drawV(v, asleep, air, rot, hop) {                      // hop: extra lift, the rave's bounce
+  var sc = depth(v.y), sw = v.r * 2.4 * sc, hv = hopV(v) + (hop || 0);
   if (!air) ctx.drawImage(SHADOW, v.x - sw / 2, v.y - sw * 0.14, sw, sw * 0.28);
   var spr = asleep ? v.spr.shut : v.happy > 0 ? v.spr.happy : v.blinkT > 0 ? v.spr.shut : v.spr.open;
   var g = v.gait || 0, sy = 1 - 0.1 * Math.pow(1 - Math.abs(Math.sin(v.phase)), 3) * g + 0.03 * Math.sin(clockT * 2.4 + v._seed) * (1 - g);
-  blit(spr, v.x, v.y - hopV(v), v.face, 1 / sy, sy, sc, rot);
-  if (v.umb) { var top = v.y - hopV(v) - v.r * 2.35 * sc, ux = v.x + v.face * 3;
+  blit(spr, v.x, v.y - hv, v.face, 1 / sy, sy, sc, rot);
+  if (v.umb) { var top = v.y - hv - v.r * 2.35 * sc, ux = v.x + v.face * 3;
     ctx.strokeStyle = "#5A4A3A"; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(ux, top); ctx.lineTo(ux, top + v.r * 1.2 * sc); ctx.stroke();
     ctx.fillStyle = v.umb; ctx.beginPath(); ctx.arc(ux, top + 2, v.r * 1.05 * sc, Math.PI, 0); ctx.closePath(); ctx.fill(); }
 }
@@ -1474,6 +1630,8 @@ function makeIcons() {
       g.fillStyle = "#B8A27E"; g.fillRect(5, 3, 6, 3); g.fillStyle = "#E0C98F"; g.beginPath(); g.arc(8, 12, 2.5, 0, 7); g.fill(); }),
     letter: icon(16, 11, function (g) { g.fillStyle = "#FFFFFF"; g.strokeStyle = "#B9B4AA"; g.lineWidth = 1; g.fillRect(1, 1, 14, 9.5); g.strokeRect(1, 1, 14, 9.5);
       g.beginPath(); g.moveTo(1, 1); g.lineTo(8, 6.5); g.lineTo(15, 1); g.stroke(); g.fillStyle = "#E86A5B"; g.fillRect(11, 2.5, 2.5, 2.5); }),
+    gift: icon(16, 17, function (g) { g.fillStyle = "#E86A5B"; g.fillRect(2, 7, 12, 10); g.fillStyle = "#C94F44"; g.fillRect(1, 5, 14, 4);       // a present for the house party
+      g.fillStyle = "#F3DE7C"; g.fillRect(7, 5, 2.5, 12); g.beginPath(); g.arc(5.5, 3.5, 2.2, 0, 7); g.arc(10.5, 3.5, 2.2, 0, 7); g.fill(); }),
     bucket: icon(14, 14, function (g) { g.fillStyle = "#8FA6B8"; g.beginPath(); g.moveTo(1, 3); g.lineTo(13, 3); g.lineTo(11, 13); g.lineTo(3, 13); g.closePath(); g.fill();
       g.fillStyle = "#6FB6E8"; g.beginPath(); g.ellipse(7, 3.5, 6, 1.8, 0, 0, 7); g.fill(); }),
     cat: icon(26, 26, function (g) { rimmed(g, "#5F6270", "#8C8F9E", 1.2, function (e) {
@@ -1494,7 +1652,42 @@ function makeIcons() {
     wagon: icon(74, 46, function (g) { rimmed(g, "#2F6B69", "#5E9C9A", 2, function (e) { rr(g, 4 - e, 8 - e, 62 + 2 * e, 28 + 2 * e, 8); g.fill(); });
       g.fillStyle = "#F2E8D8"; rr(g, 2, 2, 66, 9, 4); g.fill();
       g.fillStyle = "#FFE9A6"; [12, 30, 48].forEach(function (x) { rr(g, x, 14, 12, 10, 3); g.fill(); });
-      g.strokeStyle = "#8D6440"; g.lineWidth = 2; g.beginPath(); g.moveTo(66, 30); g.lineTo(74, 30); g.stroke(); })
+      g.strokeStyle = "#8D6440"; g.lineWidth = 2; g.beginPath(); g.moveTo(66, 30); g.lineTo(74, 30); g.stroke(); }),
+    bag: icon(22, 24, function (g) { rimmed(g, "#3F7A50", "#9EE0B4", 1.2, function (e) { rr(g, 3 - e, 6 - e, 16 + 2 * e, 17 + 2 * e, 5); g.fill(); });   // the kit bag, in the otter's green
+      g.strokeStyle = "#3F7A50"; g.lineWidth = 2; g.beginPath(); g.moveTo(7, 6); g.quadraticCurveTo(11, -1, 15, 6); g.stroke();
+      g.fillStyle = "#3F7A50"; rr(g, 6, 13, 10, 7, 2); g.fill(); g.fillStyle = "#FFFFFF"; g.beginPath(); g.arc(11, 10, 1.6, 0, 7); g.fill(); })
+  };
+}
+// The workshop's building, in the stages a print goes through. Anchors are the
+// bottom centre of the plot; the roof is blitted higher.
+function makeShop() {
+  function pole(g, x, y0, y1) { g.fillStyle = "#B08A5A"; g.fillRect(x - 2, y0, 4, y1 - y0); }
+  return {
+    frame: icon(112, 84, function (g) {                                  // scaffold poles, cross planks, a pile of planks
+      pole(g, 8, 6, 84); pole(g, 104, 6, 84); pole(g, 8, 6, 84);
+      g.fillStyle = "#C9A06A"; [24, 50, 74].forEach(function (y) { g.fillRect(4, y, 104, 4); });
+      g.fillStyle = "#D9B27A"; g.fillRect(70, 74, 34, 5); g.fillRect(72, 68, 30, 5); g.fillRect(74, 62, 26, 5);
+      g.strokeStyle = "rgba(90,60,30,.35)"; g.lineWidth = 1; g.beginPath(); g.moveTo(8, 84); g.lineTo(104, 24); g.stroke(); }),
+    walls1: icon(90, 26, function (g) { rimmed(g, "#9C7B57", "#EAD8B6", 2, function (e) { g.fillRect(3 - e, 4 - e, 84 + 2 * e, 22 + 2 * e); });
+      g.strokeStyle = "rgba(120,90,60,.35)"; g.lineWidth = 1; for (var y = 10; y < 26; y += 6) { g.beginPath(); g.moveTo(3, y); g.lineTo(87, y); g.stroke(); } }),
+    walls2: icon(90, 52, function (g) { rimmed(g, "#9C7B57", "#EAD8B6", 2, function (e) { g.fillRect(3 - e, 2 - e, 84 + 2 * e, 50 + 2 * e); });
+      g.fillStyle = "#6D8FB5"; rr(g, 14, 20, 24, 32, 6); g.fill(); g.fillStyle = "#E8C66A"; g.beginPath(); g.arc(33, 37, 1.8, 0, 7); g.fill();   // wide door
+      g.fillStyle = "#FFE9A6"; rr(g, 50, 14, 22, 16, 4); g.fill();                                                                            // window
+      g.strokeStyle = "rgba(90,60,40,.5)"; g.lineWidth = 1.5; g.beginPath(); g.moveTo(61, 14); g.lineTo(61, 30); g.stroke(); }),
+    roof: icon(110, 44, function (g) { g.fillStyle = "#8C6E62"; g.fillRect(74, 4, 12, 26);                                                    // chimney behind
+      rimmed(g, "#48648A", "#6D8FB5", 2, function (e) { g.beginPath(); g.moveTo(2 - e, 44 + e); g.lineTo(55, 8 - e); g.lineTo(108 + e, 44 + e); g.closePath(); g.fill(); });
+      g.strokeStyle = "rgba(255,255,255,.22)"; g.lineWidth = 2; [30, 22, 14].forEach(function (yy, i) { var hw = 53 * (yy - 8) / 36; g.beginPath(); g.moveTo(55 - hw, yy + 8); g.lineTo(55 + hw, yy + 8); g.stroke(); }); }),
+    sign: icon(26, 30, function (g) { pole(g, 13, 8, 30); rimmed(g, "#7A5238", "#F2E8D8", 1.5, function (e) { rr(g, 1 - e, 1 - e, 24 + 2 * e, 16 + 2 * e, 3); g.fill(); });   // a little cube: what it makes
+      g.fillStyle = "#E86A5B"; g.beginPath(); g.moveTo(9, 6); g.lineTo(13, 4); g.lineTo(17, 6); g.lineTo(13, 8); g.closePath(); g.fill();
+      g.fillStyle = "#C24E42"; g.beginPath(); g.moveTo(9, 6); g.lineTo(13, 8); g.lineTo(13, 14); g.lineTo(9, 12); g.closePath(); g.fill();
+      g.fillStyle = "#F4A340"; g.beginPath(); g.moveTo(17, 6); g.lineTo(13, 8); g.lineTo(13, 14); g.lineTo(17, 12); g.closePath(); g.fill(); }),
+    rubble: icon(100, 30, function (g) { [[10, 22, 30, 6, -0.2], [42, 18, 34, 6, 0.15], [66, 24, 28, 6, -0.35], [26, 12, 26, 5, 0.4], [54, 8, 22, 5, -0.1]].forEach(function (p) {
+        g.save(); g.translate(p[0] + p[2] / 2, p[1]); g.rotate(p[4]); g.fillStyle = "#C9A06A"; g.fillRect(-p[2] / 2, -p[3] / 2, p[2], p[3]); g.restore(); });
+      g.fillStyle = "#EAD8B6"; [[14, 26], [36, 27], [80, 25], [58, 20]].forEach(function (p) { g.fillRect(p[0], p[1], 10, 4); }); }),
+    bunting: icon(120, 26, function (g) { var cols = ["#E86A5B", "#F3DE7C", "#6C8FD0", "#7BC47F", "#E68AB0", "#F4A340"];
+      g.strokeStyle = "rgba(90,80,70,.8)"; g.lineWidth = 1.2; g.beginPath(); g.moveTo(2, 4); g.quadraticCurveTo(60, 20, 118, 4); g.stroke();
+      for (var i = 0; i < 7; i++) { var u = (i + 0.5) / 7, x = 2 + 116 * u, y = 4 + 8 * 4 * u * (1 - u);
+        g.fillStyle = cols[i % 6]; g.beginPath(); g.moveTo(x - 5, y); g.lineTo(x + 5, y); g.lineTo(x, y + 11); g.closePath(); g.fill(); } })
   };
 }
 // Speech bubbles for greetings, queues and the band's breaks.
@@ -1592,8 +1785,11 @@ function updateWalkers(dt) {
 }
 function drawWalkers() {
   var list = WALKERS.slice().sort(function (a, b) { return a.v.y - b.v.y; });
+  var rave = PARTY_T > 0.5 ? PARTY_T : MUSIC_T > 0.5 && nightness < 0.6 ? MUSIC_T * 0.7 : 0;   // everyone on the road bounces to the rave, or to the music
+  var bw = PARTY_T > 0.5 ? RAVE_W : MUSIC_W;
   for (var i = 0; i < list.length; i++) { var w = list[i];
-    drawV(w.v, false, false, w.wobble >= 0 && w.path ? Math.sin(w.wobble * 3) * 0.22 : 0);
+    var hop = rave ? Math.max(0, Math.sin(clockT * bw + w.v._seed * 3)) * 6 * rave : 0;
+    drawV(w.v, false, false, w.wobble >= 0 && w.path ? Math.sin(w.wobble * 3) * 0.22 : rave ? Math.sin(clockT * bw * 0.5 + w.v._seed) * 0.06 : 0, hop);
     if (w.carry) carry(w.carry, w.v);
     if (w.bubT > 0 && w.bub) blit(w.bub, w.v.x + w.v.face * 14, w.v.y - w.v.r * 2.1 * depth(w.v.y) - (w.v.umb ? 16 : 0), 1, 1, 1, 1);
   }
@@ -1727,24 +1923,64 @@ function makeVillage() {
       } });
   })();
 
-  // Post office: the postie does a round of three doors.
+  // Post office: the postie does a round of three doors. POSTIE.busy is shared with
+  // the letter run below, so there is one postie on the road at a time.
   (function () {
-    var t = rand(6, 16), busy = false, stops = ["school", "pub", "bakery", "cottage", "mill"];
+    var t = rand(6, 16), stops = ["school", "pub", "bakery", "cottage", "mill"];
     S.push({ layer: null,
       update: function (dt, asleep) {
-        if (asleep || nightness > 0.35 || busy) return;
-        t -= dt; if (t > 0) return; t = rand(30, 55); busy = true;
+        if (asleep || nightness > 0.35 || POSTIE.busy) return;
+        t -= dt; if (t > 0) return; t = rand(30, 55);
+        if (LETTER.queue.length) return;                                      // a real letter goes first
+        POSTIE.busy = true;
         var list = stops.slice().sort(function () { return Math.random() - 0.5; }).slice(0, 3), at = DOORS.post;
         var w = walker(DOORS.post, { col: "#F6C28B", hat: "postcap", speed: 32 });
         (function next() {
           var to = list.length ? DOORS[list.shift()] : DOORS.post, from = at; at = to;
-          if (to === DOORS.post) { leg(w, route(from, to), function () { busy = false; }); return; }
+          if (to === DOORS.post) { leg(w, route(from, to), function () { POSTIE.busy = false; }); return; }
           leg(w, route(from, to), function () {
             parts.push({ kind: "icon", icon: ICON.letter, x: w.v.x, y: w.v.y - 40, vx: -w.v.face * 12, vy: -40, life: 0.8, max: 0.8 });
             puff("heart", to.x, to.y - 50, 1, "#FF7FA0"); w.pause = 0.9; w.v.happy = 1; next();
           }, ICON.letter);
         })();
       }, draw: function () {} });
+  })();
+
+  // Letters from a phone (SENSORS.letter, see LETTER). The postie takes
+  // the envelope off the road and across the meadow to whoever it names, following
+  // them if they wander. Post office hours only: a letter sent after dark, or to
+  // someone who is out, waits on the postbox until it can go.
+  (function () {
+    var run = null, PB = { x: L.post.x + 57, y: B - 34 };
+    S.push({ layer: "back",
+      update: function (dt, asleep) {
+        if (run) {
+          var w = run.w, t = run.t;
+          if (run.st === "road") return;                                     // on a leg; its callback moves us on
+          if (run.st === "walk") {
+            if (asleep || nightness > 0.6) { run.st = "back"; w.q = null; leg(w, fromHere(w, DOORS.post), function () { POSTIE.busy = false; run = null; }); LETTER.queue.unshift(run.letter); return; }
+            var gx = t.x - t.face * t.r * 1.2, gy = t.y + 4;
+            if (walkV(w.v, gx, gy, 36, dt) || Math.abs(w.v.x - t.x) + Math.abs(w.v.y - t.y) < t.r * 1.6) {
+              t.letter = run.letter; t.happy = 2.2; t.jump = 0.6; say("!", t.x, t.y - t.r * 2.6);
+              parts.push({ kind: "icon", icon: ICON.letter, x: w.v.x, y: w.v.y - 40, vx: (t.x - w.v.x) * 1.5, vy: -50, life: 0.7, max: 0.7 });
+              w.v.happy = 1.5; w.v.face = t.x > w.v.x ? 1 : -1; w.carry = null; w.q = null; run.st = "back";
+              leg(w, fromHere(w, DOORS.post), function () { POSTIE.busy = false; run = null; });
+            }
+          }
+          return;
+        }
+        if (!LETTER.queue.length || asleep || nightness > 0.35 || POSTIE.busy) return;
+        var L1 = LETTER.queue[0], to = fam.filter(function (f) { return f.person.name === L1.to; })[0];
+        if (!to || offStage(to)) return;                                     // out: it waits
+        LETTER.queue.shift(); POSTIE.busy = true;
+        var w2 = walker(DOORS.post, { col: "#F6C28B", hat: "postcap", speed: 34 });
+        run = { w: w2, t: to, letter: L1, st: "road" };
+        leg(w2, route(DOORS.post, { x: to.x, y: R, lane: [] }), function () { run.st = "walk"; w2.q = run; w2.carry = ICON.letter; }, ICON.letter);
+      },
+      draw: function (time) {
+        // waiting mail sits on the postbox
+        if (LETTER.queue.length && !run) blit(ICON.letter, PB.x, PB.y + Math.sin(time * 2) * 1.5, 1, 1, 1, 1.4);
+      } });
   })();
 
   // Market: a stallholder, a queue, and bread when the baker has been.
@@ -1837,9 +2073,82 @@ function makeVillage() {
       light: function (a) { ctx.fillStyle = "rgba(255,212,120," + (0.85 * a).toFixed(2) + ")"; rr(ctx, m.x - 8, B - 84, 16, 18, 4); ctx.fill(); } });
   })();
 
-  // Cottage window at night.
-  S.push({ layer: null, update: function () {}, draw: function () {},
+  // Cottage: the window at night, and the kit bag by the door when the kit sensor
+  // says kit is needed (see kitBag).
+  S.push({ layer: "back", update: function () {},                         // "back", or draw() never runs
+    draw: function () { if (kitBag()) blit(ICON.bag, L.cottage.x + 6, B + 3, 1, 1, 1, 1); },
     light: function (a) { ctx.fillStyle = "rgba(255,212,120," + (0.85 * a).toFixed(2) + ")"; rr(ctx, L.cottage.x + 6, B - 44, 26, 20, 4); ctx.fill(); } });
+
+  // Workshop: the Bambu A1 Mini's job as a building. The plot is bare until a job
+  // exists; then a scaffold, walls, a roof and a sign go up as the print's progress
+  // rises, with a builder hammering. Pause sits him down, failed knocks it flat,
+  // finish rings a bell and hangs bunting. The finished building stays until the
+  // next job starts or the printer has been idle half an hour. Offline, unknown or
+  // unreachable is the bare plot: a missing sensor never builds anything.
+  (function () {
+    var s = L.shop, v = mkV("#E8C3A0", "cap", s.x + 62, s.y + 4), sw = 0, st = "empty", stage = 0, bell = 0, idleT = 0, hold = 0, bub = 0, smoke = 0;
+    function stageFor(p) { return p < 12 ? 0 : p < 40 ? 1 : p < 70 ? 2 : p < 95 ? 3 : 4; }
+    function collapse() { for (var i = 0; i < 4; i++) puff("poof", s.x + rand(-40, 40), s.y - rand(10, 60), 4, "#FFFFFF");
+      puff("chip", s.x, s.y - 30, 12, "#C9A06A"); say("oops!", s.x, s.y - 80); v.face = -1; }
+    S.push({ layer: "back", v: v,
+      update: function (dt, asleep) {
+        tickV(v, dt); bell = Math.max(0, bell - dt); bub -= dt; smoke -= dt; hold += dt;
+        var ps = printerState(), next;
+        if (ps === "running" || ps === "pause") next = ps;
+        else if (/^(prepare|slicing|init)$/.test(ps)) next = "prep";
+        else if (ps === "finish") next = "done";
+        else if (ps === "failed") next = "failed";
+        else if (ps === "idle" && (st === "done" || st === "failed")) { idleT += dt; next = idleT > 30 * 60 ? "empty" : st; }
+        else next = "empty";
+        if (ps !== "idle") idleT = 0;
+        if (next !== st) {
+          var was = st; st = next; hold = 0;
+          if (st === "failed") collapse();
+          else if (st === "done") { bell = 3; stage = 4; say("ding!", s.x, s.y - 100); puff("heart", s.x, s.y - 70, 4, "#FF7FA0"); v.happy = 3; }
+          else if (st === "running" || st === "prep" || st === "pause") { if (was === "empty" || was === "done" || was === "failed") stage = st === "prep" ? 0 : stageFor(PR.progress); }
+        }
+        if (st === "running") {
+          var want = stageFor(PR.progress);
+          if (want > stage && hold > 1.5) { stage = want; hold = 0; puff("chip", s.x + rand(-30, 30), s.y - 20 - stage * 12, 6, "#D9B27A"); v.happy = 1; }
+          v.face = -1; sw += dt / 0.9; if (sw >= 1) { sw = 0; if (Math.random() < 0.5) puff("chip", s.x + 30, s.y - 14 - stage * 8, 2, "#D9B27A"); }
+        } else if (st === "pause" || st === "failed") { if (bub <= 0 && Math.random() < dt * 0.3) bub = 1.6; }
+        else if (st === "prep") { v.face = -1; if (bub <= 0 && Math.random() < dt * 0.4) bub = 1.6; }
+        else if (st === "done" && !asleep && smoke < 0) { smoke = rand(0.8, 1.6);
+          parts.push({ kind: "smoke", x: s.x + 30 + rand(-2, 2), y: s.y - 88, vx: rand(4, 10), vy: -14, life: 3, max: 3 }); }
+      },
+      draw: function (time, asleep) {
+        if (st === "empty") return;
+        var stg = st === "failed" ? -1 : st === "done" ? 4 : stage;
+        if (stg < 0) blit(SHOP.rubble, s.x, s.y, 1, 1, 1, 1);
+        else {
+          if (stg < 4) blit(SHOP.frame, s.x, s.y, 1, 1, 1, 1);
+          if (stg === 1) blit(SHOP.walls1, s.x, s.y, 1, 1, 1, 1);
+          if (stg >= 2) blit(SHOP.walls2, s.x, s.y, 1, 1, 1, 1);
+          if (stg >= 3) blit(SHOP.roof, s.x, s.y - 48, 1, 1, 1, 1);
+          if (stg === 4) blit(SHOP.sign, s.x - 56, s.y, 1, 1, 1, 1);
+        }
+        if (st === "done") { blit(SHOP.bunting, s.x, s.y - 92, 1, 1, 1, 1);
+          var ba = bell > 0 ? Math.sin(bell * 14) * 0.5 : 0;
+          ctx.save(); ctx.translate(s.x + 30, s.y - 100); ctx.rotate(ba); ctx.fillStyle = "#E8B33C";
+          ctx.beginPath(); ctx.moveTo(-5, 7); ctx.quadraticCurveTo(-5, -3, 0, -3); ctx.quadraticCurveTo(5, -3, 5, 7); ctx.closePath(); ctx.fill(); ctx.restore(); }
+        // the builder
+        if (st === "pause") { var sc = depth(v.y);                                  // sat on the plank pile, waiting
+          ctx.drawImage(SHADOW, v.x - v.r * 1.2 * sc, v.y - 4, v.r * 2.4 * sc, v.r * 0.7 * sc);
+          blit(asleep ? v.spr.shut : v.spr.open, v.x, v.y - 6, -1, 1.12, 0.78, sc);
+          if (bub > 0) blit(BUBS.dots, v.x + 12, v.y - 36, 1, 1, 1, 1);
+          return; }
+        drawV(v, asleep);
+        if (st === "prep" && bub > 0) blit(BUBS.dots, v.x + 12, v.y - v.r * 2.1, 1, 1, 1, 1);
+        if (st === "running" && !asleep) {                                          // the hammer, same swing as the woodcutter's axe
+          var a = sw < 0.7 ? -0.3 - 2.0 * (sw / 0.7) : -2.3 + 2.1 * ((sw - 0.7) / 0.3);
+          var hx = v.x - 8, hy = v.y - v.r * 0.9 * depth(v.y), ex = hx - Math.cos(a) * 22, ey = hy + Math.sin(a) * 22;
+          ctx.strokeStyle = "#8D6440"; ctx.lineWidth = 3; ctx.lineCap = "round"; ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(ex, ey); ctx.stroke();
+          ctx.save(); ctx.translate(ex, ey); ctx.rotate(-a); ctx.fillStyle = "#6E7480"; ctx.fillRect(-6, -4, 12, 8); ctx.restore();
+        }
+        if (st === "failed" && bub > 0) blit(BUBS.dots, v.x + 12, v.y - v.r * 2.1, 1, 1, 1, 1);
+      },
+      light: function (a) { if (st === "done" || st === "running") { ctx.fillStyle = "rgba(255,212,120," + (0.85 * a).toFixed(2) + ")"; rr(ctx, s.x + 12, s.y - 36, 20, 16, 4); ctx.fill(); } } });
+  })();
 
   // School: the bell rings, kids pile out, play tag, one takes the swing, bell, back in.
   (function () {
@@ -1852,7 +2161,7 @@ function makeVillage() {
     function yard() { return { x: rand(X0, X1), y: rand(Y0, Y1) }; }
     S.push({ layer: "back",
       update: function (dt, asleep) {
-        bell = Math.max(0, bell - dt);
+        bell = Math.max(0, bell - dt); SCHOOL_OUT = st === "out";
         var swinger = kids[SWINGER], onSwing = st === "out" && swinger.onSwing;
         amp += ((onSwing ? 0.7 : 0) - amp) * dt * 0.5; k += dt; th = amp * Math.sin(k * 2.2);
         if (asleep) { st = "in"; kids.forEach(function (v) { v.inside = true; v.onSwing = false; }); return; }
@@ -2004,25 +2313,26 @@ function makeVillage() {
         trio.forEach(function (v) { tickV(v, dt); }); DANCE = null; bubT -= dt;
         if (asleep) return;
         t -= dt; if (t < 0) { play = !play; t = play ? rand(40, 70) : rand(12, 20); if (!play) say("thank you!", b.x, b.y - 150); }
-        if (PARTY_T > 0.5) { play = true; t = Math.max(t, 5); }
-        if (play && WX.rain < 0.6) { k += dt; DANCE = { x: b.x, y: b.y - 30, r: 230, k: k };
-          note -= dt; if (note < 0) { note = rand(0.25, 0.6); var v = pick(trio);
+        if (PARTY_T > 0.5 || MUSIC.on) { play = true; t = Math.max(t, 5); }            // no breaks while the speaker plays
+        if (play && (WX.rain < 0.6 || MUSIC_T > 0.5)) { k += dt; DANCE = { x: b.x, y: b.y - 30, r: 230, k: k };   // under the canopy, the music carries on in the rain
+          note -= dt; if (note < 0) { note = MUSIC_T > 0.5 ? rand(0.1, 0.25) : rand(0.25, 0.6); var v = pick(trio);
             parts.push({ kind: "note", x: v.x + rand(-6, 6), y: v.y - 44, vx: rand(-12, 12), vy: -32, life: 1.6, max: 1.6, col: pick(["#3B5FA8", "#E86A5B", "#4E9A5A"]) }); } }
         else if (bubT <= 0 && Math.random() < dt * 0.5) { who = (who + 1) % 3; bub = pick([BUBS.ha, BUBS.dots, BUBS.heart, BUBS.note]); bubT = 1.5; trio[who].happy = 1; }
       },
       draw: function (time, asleep) {
-        var beat = DANCE ? Math.sin(DANCE.k * 7) : 0;
+        var beat = DANCE ? Math.sin(DANCE.k * 7) : 0, m = asleep || !DANCE ? 0 : MUSIC_T * (1 - PARTY_T);   // m: the speaker's playing, so they go big
         trio.forEach(function (v, i) {
-          var sy = 1 + (DANCE ? 0.05 * Math.sin(DANCE.k * 7 + i) : 0);
+          var bt = DANCE ? Math.sin(DANCE.k * 7 + i) : 0, sy = 1 + (DANCE ? (0.05 + 0.07 * m) * bt : 0);
+          var hop = m * Math.max(0, bt) * 8, rot = m * 0.13 * (DANCE ? Math.sin(DANCE.k * 3.5 + i * 1.7) : 0);
           var spr = asleep ? v.spr.shut : DANCE || v.happy > 0 ? v.spr.happy : v.blinkT > 0 ? v.spr.shut : v.spr.open, sc = depth(v.y);
-          blit(spr, v.x, v.y, v.face, 1 / sy, sy, sc);
-          var hy = v.y - v.r * 0.9 * sc;
+          blit(spr, v.x, v.y - hop, v.face, 1 / sy, sy, sc, rot);
+          var hy = v.y - v.r * 0.9 * sc - hop, sw = beat * (1 + 1.4 * m);
           if (i === 0) { ctx.fillStyle = "#9C5B2E"; ctx.beginPath(); ctx.ellipse(v.x + 12, hy + 2, 5, 8, 0.6, 0, 7); ctx.fill();
-            ctx.strokeStyle = "#E2C08E"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(v.x + 4 + beat * 4, hy - 8); ctx.lineTo(v.x + 22 + beat * 4, hy + 8); ctx.stroke(); }
+            ctx.strokeStyle = "#E2C08E"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(v.x + 4 + sw * 4, hy - 8); ctx.lineTo(v.x + 22 + sw * 4, hy + 8); ctx.stroke(); }
           else if (i === 1) { ctx.fillStyle = "#D9534F"; ctx.fillRect(v.x - 11, hy + 4, 22, 13); ctx.fillStyle = "#FFF4E8"; ctx.beginPath(); ctx.ellipse(v.x, hy + 4, 11, 3.5, 0, 0, 7); ctx.fill();
-            ctx.strokeStyle = "#8D6440"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(v.x - 7, hy + 3); ctx.lineTo(v.x - 12, hy - 7 - Math.max(0, beat) * 5);
-            ctx.moveTo(v.x + 7, hy + 3); ctx.lineTo(v.x + 12, hy - 7 - Math.max(0, -beat) * 5); ctx.stroke(); }
-          else { ctx.fillStyle = "#E8B33C"; ctx.beginPath(); ctx.moveTo(v.x - 6, hy); ctx.lineTo(v.x - 22, hy - 7); ctx.lineTo(v.x - 22, hy + 7); ctx.closePath(); ctx.fill(); }
+            ctx.strokeStyle = "#8D6440"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(v.x - 7, hy + 3); ctx.lineTo(v.x - 12, hy - 7 - Math.max(0, sw) * 5);
+            ctx.moveTo(v.x + 7, hy + 3); ctx.lineTo(v.x + 12, hy - 7 - Math.max(0, -sw) * 5); ctx.stroke(); }
+          else { var hb = m * 8 * bt; ctx.fillStyle = "#E8B33C"; ctx.beginPath(); ctx.moveTo(v.x - 6, hy); ctx.lineTo(v.x - 22, hy - 7 - hb); ctx.lineTo(v.x - 22, hy + 7 - hb); ctx.closePath(); ctx.fill(); }
         });
         if (bubT > 0 && bub) blit(bub, trio[who].x + 12, trio[who].y - 42, 1, 1, 1, 1);
       } });
@@ -2133,6 +2443,11 @@ function drawRainbow() {
 // wind speed the wind, its temperature the readout by the clock. sun.sun sets how
 // dark it is. Without a weather entity the old random showers carry on, and the
 // corner says so.
+// The rain sensor (SENSORS.rain) adds rain met.no misses: on 2026-10-03 met.no said
+// cloudy through three hours of drizzle the sensor caught. It never takes rain
+// away, because the same day it missed showers you could see from the window. RAIN is "raining",
+// "none", or null when the sensor is unknown, unavailable or unread.
+var RAIN = null;
 var DARK = 0, FOGSPR = null, SNOWMAN = null, BUNTING = null, CAKE = null, BALLOONS = [], FW = [], ROCKETS = [];
 var WMAP = { "sunny": "clear", "clear-night": "clear", "partlycloudy": "partly", "cloudy": "cloudy", "fog": "fog",
   "rainy": "rain", "snowy": "snow", "snowy-rainy": "snow", "pouring": "storm", "lightning": "storm",
@@ -2142,10 +2457,12 @@ var WTARGET = { clear: [0.1, 0, 0, 0, 0], partly: [0.45, 0, 0, 0, 0], cloudy: [0
 
 function weatherNow() {
   if (WFORCE) return { mode: WFORCE === "sunny" ? "clear" : WFORCE, wind: WFORCE === "windy" ? 1 : WFORCE === "storm" ? 0.7 : 0.1, temp: 12, test: true };
-  var w = DATA.weather; if (!w || !w.state || w.state === "unavailable" || w.state === "unknown") return null;
-  var a = w.attributes || {}, mode = WMAP[w.state] || "clear", ws = +a.wind_speed || 0;
+  var w = DATA.weather, ok = w && w.state && w.state !== "unavailable" && w.state !== "unknown";
+  if (!ok && !RAIN) return null;
+  var a = ok ? w.attributes || {} : {}, mode = ok ? WMAP[w.state] || "clear" : "cloudy", ws = +a.wind_speed || 0;
   if (a.wind_speed_unit === "m/s") ws *= 3.6; else if (a.wind_speed_unit === "mph") ws *= 1.61;
   var wind = clamp((ws - 15) / 35, 0, 1); if (mode === "windy") wind = Math.max(wind, 0.8);
+  if (RAIN === "raining" && !/^(rain|storm|snow)$/.test(mode)) mode = "rain";   // keeps met.no's storm or snow
   return { mode: mode, wind: wind, temp: a.temperature, unit: a.temperature_unit || "°C" };
 }
 // How dark it is, from sun.sun: dusk starts ten minutes before sunset and is full
@@ -2234,6 +2551,7 @@ function makeWeatherSprites() {
   BALLOONS = [[L.band.x - 70, L.band.y - 92], [L.band.x - 26, L.band.y - 92], [L.band.x + 26, L.band.y - 92], [L.band.x + 70, L.band.y - 92],
     [L.market.x - 60, B - 86], [L.market.x + 60, B - 86], [L.bakery.x + 70, B - 80]].map(function (a, i) {
       return { x: a[0], y: a[1], ph: rand(0, 6), col: cols[i % cols.length], len: rand(26, 40) }; });
+  makePartySprites(cols);
 }
 function drawWeatherGround() {
   if (WX.snow > 0.02) { ctx.fillStyle = "rgba(246,249,255," + (0.5 * WX.snow).toFixed(3) + ")"; ctx.fillRect(0, HZ - 30, W, H);
@@ -2276,11 +2594,40 @@ function drawWeatherFront(time) {
 }
 
 // ── Parties ────────────────────────────────────────────────────────────────
-// A family birthday, the ANNIVERSARY couple's anniversary, Halloween, bonfire night,
-// Christmas and New Year's Eve. Friends' birthdays are on the calendars most weeks,
-// so only names (or aliases) from PEOPLE get a party. Titles are matched as the
-// calendars actually write them.
-var PARTY = null, PARTY_T = 0;
+// Two sizes of party, and a day can have both.
+// The rave (PARTY): a family birthday, the ANNIVERSARY couple's anniversary, Halloween, bonfire
+//   night, Christmas and New Year's Eve. Bunting across the village, hats on whoever
+//   it is for, the cake at the bandstand, and then the lot: a glitter ball over the
+//   road, lasers off the bandstand and the pitch, colour washes and ground spots on a
+//   128 bpm beat, the family bouncing to it, the road bouncing with them, fireworks
+//   once it is dark. Bedtime moves to 21:30 (see frame).
+// The house party (HOUSE): any other birthday on today's calendars, a friend's like
+//   "Pat's birthday", is a do at the cottage and stays there. Bunting on the roof,
+//   balloons by the door, the window lit in party colours, guests walking in with
+//   presents and out again full of cake, notes drifting from the window, and a card
+//   over the roof with the name. It does not move bedtime.
+// "King's birthday" and its like are nobody's party. Both start at the event's time
+// (17:00 for an all-day entry, never later than 17:00) and fade when the meadow goes
+// to sleep. Titles are matched as the calendars actually write them.
+// The countdown days (see Countdowns below) also throw parties without needing a
+//   calendar entry: a family birthday, Christmas, Halloween, bonfire night and New
+//   Year's Eve get the rave AND a do at the blue cottage; Easter and the end of term
+//   get the cottage only. All from 17:00.
+// Test hooks: ?party=alex (a name from PEOPLE, or halloween|bonfire|christmas|anniversary|
+// new-years-eve) forces the rave; ?party=friend or ?party=friend:Pat forces the house
+// party; ?party=alex,friend forces both. ?date=2026-12-25&hour=18 is the real path: the
+// countdown list finds the day and both parties follow. Forced parties start at 17:00, so pair with
+// ?hour=18 (daylight) or ?hour=20.5 (dusk: lights up, fireworks). The demo data has
+// Pat's birthday today, so ?demo&hour=18 alone shows the house party. Headless Chrome
+// only runs a few frames before its screenshot, so add &warm=20 to see the fades
+// finished and the first guests through the door.
+var PARTY = null, PARTY_T = 0, HOUSE = null, HOUSE_T = 0, RAVE_W = 13.4;    // RAVE_W: the beat, rad/s (128 bpm)
+// Music: when the living-room speaker plays music the meadow dances along. Same moves as the
+// rave, smaller, at a fixed 120 bpm (Music Assistant gives Home Assistant no tempo), and no
+// lights. Notes drift from the cottage window. The rave wins when both are on.
+var MUSIC = { on: false, title: null, artist: null, at: null, err: null }, MUSIC_T = 0, MUSIC_W = 12.566, MUSIC_NOTE = 0;
+var SIGN = null, SIGN_KEY = "", SPECKS = [];
+var HP = { guest: 4, note: 0, card: null, key: "" }, HBAL = [], SPOTS = [], DISCO = null;
 function partyFor(title) {
   var t = String(title).trim(), all = PEOPLE.map(function (p) { return p.name; });
   if (/birthday|\bbday\b/i.test(t) && !/king/i.test(t)) {
@@ -2296,15 +2643,115 @@ function partyFor(title) {
   if (/new year'?s eve/i.test(t)) return { who: all, label: "Happy New Year!" };
   return null;
 }
-function findParty() {
-  if (PFORCE) { var f = PEOPLE.filter(function (p) { return p.name.toLowerCase() === PFORCE.toLowerCase(); })[0];
-    var P0 = f ? partyFor(f.name + " birthday") : partyFor(PFORCE.replace(/-/g, " ")); if (P0) P0.start = 17; return P0; }
-  var td = ymd(now());
-  for (var i = 0; i < DATA.events.length; i++) { var e = DATA.events[i]; if (e.day !== td) continue;
-    var P = partyFor(e.what); if (P) { P.start = e.all_day ? 17 : Math.min(17, new Date(e.start).getHours() + new Date(e.start).getMinutes() / 60); return P; } }
+// A friend's birthday: any birthday partyFor() did not claim. The name is what is
+// left of the title once "birthday", the possessive, a "40th" and any emoji go.
+function friendParty(title) {
+  var t = String(title).trim();
+  if (!/birthday|\bbday\b/i.test(t) || /king/i.test(t) || partyFor(t)) return null;
+  var n = t.replace(/birthday|\bbday\b/ig, " ").replace(/['’]s\b/g, "").replace(/\b\d+(st|nd|rd|th)?\b/g, " ")
+    .replace(/[^A-Za-zÀ-ɏ\s'-]/g, " ").replace(/\s+/g, " ").trim().split(" ").slice(0, 2).join(" ");
+  if (n.length > 18) n = n.split(" ")[0].slice(0, 18);
+  return { who: [], name: n, label: n ? n + "'s birthday" : "Birthday party" };
+}
+// ?party= tokens, by kind: family names and the fixed days are the rave, friend[:Name] is the house party.
+function forcedParty(kind) {
+  var toks = decodeURIComponent(PFORCE).split(","), i, tk, P0;
+  for (i = 0; i < toks.length; i++) { tk = toks[i].trim();
+    if (/^(friend|house)(:|$)/i.test(tk)) { if (kind === "house") { P0 = friendParty((tk.split(":")[1] || "Pat") + "'s birthday"); if (P0) { P0.start = 17; return P0; } } continue; }
+    if (kind !== "rave") continue;
+    var f = PEOPLE.filter(function (p) { return p.name.toLowerCase() === tk.toLowerCase(); })[0];
+    P0 = f ? partyFor(f.name + " birthday") : partyFor(tk.replace(/-/g, " ")); if (P0) { P0.start = 17; return P0; }
+  }
   return null;
 }
+function startOf(e) { return e.all_day ? 17 : Math.min(17, new Date(e.start).getHours() + new Date(e.start).getMinutes() / 60); }
+function findParty() {
+  if (PFORCE) return forcedParty("rave");
+  var td = ymd(now());
+  for (var i = 0; i < DATA.events.length; i++) { var e = DATA.events[i]; if (e.day !== td) continue;
+    var P = partyFor(e.what); if (P) { P.start = startOf(e); return P; } }
+  // no calendar entry needed: the countdown list knows the family's own days
+  for (i = 0; i < CD.length; i++) if (CD[i].days === 0 && CD[i].rave) { P = partyFor(CD[i].rave); if (P) { P.start = 17; return P; } }
+  return null;
+}
+function findHouseParty() {
+  if (PFORCE) return forcedParty("house");
+  // every countdown day ends with a party in the blue cottage, from 17:00; a family
+  // day outranks a friend's birthday for the card over the chimney
+  for (var i = 0; i < CD.length; i++) if (CD[i].days === 0) return { who: [], label: CD[i].party, start: 17 };
+  var td = ymd(now());
+  for (i = 0; i < DATA.events.length; i++) { var e = DATA.events[i]; if (e.day !== td) continue;
+    var P = friendParty(e.what); if (P) { P.start = startOf(e); return P; } }
+  return null;
+}
+
+// ── Countdowns ──────────────────────────────────────────────────────────────
+// A row of tags in the sky: the next few of the family's days, with the days to
+// go in the badge, "today" on the day. Sources: the birthdays in DATES (CONFIG), the
+// end of term from SENSORS.extra's term dates (the soonest known end of a current
+// term across every school; nothing during the holidays, nothing until the data
+// has arrived), Easter by the Gregorian computus, the fixed days, and trips: any
+// event on SENSORS.trips with "holiday" in its title, counted to its first day and
+// labelled with the rest of the title ("Holiday Cornwall" shows as Cornwall). Shown
+// soonest first, as many as fit between the clock and the corner hint. Recomputed
+// every HUD tick, re-rendered only when the list or a number changes.
+var HOUSE_COL = "#E0A050", SCHOOL_COL = "#C9594A", CD = [];
+function easter(y) {                                                      // Easter Sunday, Gregorian (Meeus/Jones/Butcher)
+  var a = y % 19, b = Math.floor(y / 100), c = y % 100, d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25),
+    g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4,
+    l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451), n = h + l - 7 * m + 114;
+  return y + "-" + pad2(Math.floor(n / 31)) + "-" + pad2(n % 31 + 1);
+}
+function nextDate(md, td) { var y = +td.slice(0, 4), s = y + "-" + md; return s >= td ? s : (y + 1) + "-" + md; }
+function daysUntil(ds, t) { return Math.round((new Date(ds + "T12:00:00") - new Date(ymd(t) + "T12:00:00")) / 864e5); }
+function termEnd(td) {
+  var best = null;
+  ((DATA.extra || {}).schools || []).forEach(function (sc) { (sc.terms || []).forEach(function (t) {
+    if (t.to && t.to >= td && (!t.from || t.from <= td) && (!best || t.to < best)) best = t.to; }); });
+  return best;
+}
+function countdowns() {
+  var t = now(), td = ymd(t), out = [], y = +td.slice(0, 4);
+  Object.keys(DATES.birthdays).forEach(function (n) { var p = PEOPLE.filter(function (q) { return q.name === n; })[0];
+    out.push({ key: "bday-" + n, label: n, icon: "cake", col: p ? p.col : HOUSE_COL, date: nextDate(DATES.birthdays[n], td),
+      rave: n + " birthday", party: "Happy birthday " + n + "!" }); });
+  DATES.fixed.forEach(function (f) { out.push({ key: f.key, label: f.label, icon: f.icon, col: HOUSE_COL, date: nextDate(f.md, td), rave: f.rave, party: f.party }); });
+  var es = easter(y); if (es < td) es = easter(y + 1);
+  out.push({ key: "easter", label: "Easter", icon: "egg", col: HOUSE_COL, date: es, party: "Happy Easter!" });
+  (DATA.holidays || []).forEach(function (h) { if (h.date >= td)          // before the term end, so a holiday wins the chimney card on a shared day
+    out.push({ key: "hol-" + h.date + h.label, label: h.label, icon: "suitcase", col: HOUSE_COL, date: h.date, party: "Holiday time!" }); });
+  var te = termEnd(td); if (te) out.push({ key: "term", label: "End of term", icon: "school", col: SCHOOL_COL, date: te, party: "School's out!" });
+  out.forEach(function (c) { c.days = daysUntil(c.date, t); });
+  return out.sort(function (a, b) { return a.days - b.days; });
+}
+// Tiny flat icons in the meadow's own colours: the school is the village school
+// (red roof, cream walls, blue door), the cake wears pink.
+var DICON = {
+  cake: '<path d="M11 4h2v5h-2z" fill="#F3DE7C"/><circle cx="12" cy="3.4" r="1.7" fill="#E86A5B"/><rect x="3.5" y="9" width="17" height="11" rx="2.5" fill="#E68AB0"/><path d="M3.5 9h17v2q-2.1 2.4-4.25 0t-4.25 0t-4.25 0T3.5 11z" fill="#FFF4F8"/>',
+  school: '<rect x="11" y="1.5" width="2" height="4" fill="#C9594A"/><rect x="5" y="10" width="14" height="11" fill="#F6E7B8"/><path d="M2 11l10-8 10 8z" fill="#C9594A"/><rect x="10" y="14" width="4" height="7" rx="1.5" fill="#3B5FA8"/>',
+  tree: '<path d="M12 2l5 7h-3l5 6h-4l4 5H5l4-5H5l5-6H7z" fill="#4E9A5A"/><rect x="10.5" y="19" width="3" height="3.5" fill="#8A5A3C"/><circle cx="12" cy="2.6" r="1.8" fill="#F3DE7C"/>',
+  egg: '<path d="M12 2C8 2 5 8 5 13a7 7 0 0014 0C19 8 16 2 12 2z" fill="#E68AB0"/><path d="M5.6 11q3.2-2.4 6.4 0t6.4 0" fill="none" stroke="#FFF4F8" stroke-width="1.8"/><circle cx="9" cy="15.5" r="1.3" fill="#F3DE7C"/><circle cx="15" cy="15.5" r="1.3" fill="#F3DE7C"/><circle cx="12" cy="18" r="1.3" fill="#7FC8D2"/>',
+  pumpkin: '<rect x="11" y="2" width="2.4" height="5" rx="1" fill="#4E9A5A"/><ellipse cx="12" cy="13.5" rx="9.5" ry="7.5" fill="#E08A3A"/><path d="M8.5 6.6q-2 7 0 13.6M15.5 6.6q2 7 0 13.6" fill="none" stroke="#C4703A" stroke-width="1.3"/><path d="M7.5 11.5l2.5 2.3h-2.5zM16.5 11.5l-2.5 2.3h2.5z" fill="#26352C"/><path d="M8.5 16.5q3.5 2.6 7 0" fill="none" stroke="#26352C" stroke-width="1.4"/>',
+  fire: '<path d="M12 2.5c.6 3.5 5 5.5 5 10a5 5 0 01-10 0c0-2 .9-3.3 1.8-4.2.1 1.7 1 2.6 1.6 2.9C9.5 8 12 6.5 12 2.5z" fill="#E86A5B"/><path d="M12 10.5c.4 2 2.4 3 2.4 5.2a2.4 2.4 0 01-4.8 0c0-1 .5-1.8.9-2.2.1.9.5 1.3.8 1.4-.3-1.6.7-2.5.7-4.4z" fill="#F3DE7C"/><rect x="4" y="19" width="16" height="2.4" rx="1.2" fill="#8A5A3C"/>',
+  suitcase: '<rect x="9" y="3" width="6" height="4" rx="1.5" fill="none" stroke="#8A5A3C" stroke-width="1.8"/><rect x="3" y="7" width="18" height="13" rx="2.5" fill="#6C8FD0"/><rect x="7.5" y="7" width="2" height="13" fill="#F3DE7C"/><rect x="14.5" y="7" width="2" height="13" fill="#F3DE7C"/>',
+  sparkle: '<path d="M12 2l2.2 7.8L22 12l-7.8 2.2L12 22l-2.2-7.8L2 12l7.8-2.2z" fill="#F3DE7C"/><path d="M19 3l.8 2.2L22 6l-2.2.8L19 9l-.8-2.2L16 6l2.2-.8z" fill="#6C8FD0"/>'
+};
+var CD_KEY = "";
+function chipHtml(c) {
+  var today = c.days === 0;
+  return '<span class="dchip' + (today ? " now" : "") + '" style="border-color:' + shade(c.col, 0.72) + '">' +
+    '<svg class="dic" viewBox="0 0 24 24">' + (DICON[c.icon] || "") + "</svg>" +
+    '<span class="dl">' + esc(c.label) + "</span>" +
+    '<span class="dn" style="background:' + shade(c.col, 0.6) + '">' + (today ? "today" : c.days) + "</span></span>";
+}
+function renderDates() {
+  var key = CD.map(function (c) { return c.key + ":" + c.days; }).join("|");
+  if (key === CD_KEY) return; CD_KEY = key;
+  var el = $("dates"); el.innerHTML = CD.slice(0, 5).map(chipHtml).join("");
+  while (el.children.length > 1 && el.scrollWidth > el.clientWidth) el.removeChild(el.lastChild);   // as many as fit, soonest kept
+}
 function partyOn() { if (!PARTY) return false; var d = now(), h = d.getHours() + d.getMinutes() / 60; return h >= PARTY.start && nightness < 0.6; }
+function houseOn() { if (!HOUSE) return false; var d = now(), h = d.getHours() + d.getMinutes() / 60; return h >= HOUSE.start && nightness < 0.6; }
 function wearsHat(t) { return PARTY && PARTY_T > 0.01 && PARTY.who.indexOf(t.person.name) >= 0; }
 // Where a party hat sits on each animal, sprite-local, in body radii, and its tilt.
 var HAT_AT = { crow: [0.6, -2.08, 0.15], capybara: [-0.3, -2.02, -0.35], deer: [0, -1.84, 0], shark: [0.55, -1.02, 0.35], otter: [-0.14, -1.84, -0.15], snail: [-0.25, -1.98, 0] };
@@ -2319,7 +2766,26 @@ function drawPartyHat(t) {
 }
 function updateParty(dt) {
   PARTY_T = clamp(PARTY_T + (partyOn() ? dt : -dt) / 3, 0, 1);
-  if (PARTY_T > 0.5) DANCE = { x: W / 2, y: H / 2, r: 1e6, k: clockT };
+  HOUSE_T = clamp(HOUSE_T + (houseOn() ? dt : -dt) / 3, 0, 1);
+  // the rave: everyone dances on the beat (k is scaled so the bandstand's sin(k * 7) lands on RAVE_W), the road grins
+  if (PARTY_T > 0.5) { DANCE = { x: W / 2, y: H / 2, r: 1e6, k: clockT * RAVE_W / 7, amp: 9, sq: 0.1, wig: 0.07 };
+    for (var wi = 0; wi < WALKERS.length; wi++) if (WALKERS[wi].v.happy < 0.3) WALKERS[wi].v.happy = 0.6; }
+  // music on the speaker: the whole meadow grooves, a notch below the rave
+  MUSIC_T = clamp(MUSIC_T + (MUSIC.on ? dt : -dt) / 2, 0, 1);
+  if (MUSIC_T > 0.5 && PARTY_T <= 0.5 && nightness < 0.6) { DANCE = { x: W / 2, y: H / 2, r: 1e6, k: clockT * MUSIC_W / 7, amp: 6, sq: 0.08, wig: 0.05 };
+    if (HOUSE_T <= 0.5) { MUSIC_NOTE -= dt;
+      if (MUSIC_NOTE < 0) { MUSIC_NOTE = rand(0.7, 1.4);
+        parts.push({ kind: "note", x: LAY.cottage.x + 19 + rand(-6, 6), y: LAY.B - 48, vx: rand(-14, 14), vy: -30, life: 1.9, max: 1.9, col: pick(["#3B5FA8", "#E86A5B", "#4E9A5A", "#E68AB0"]) }); } } }
+  // the house party: guests in with presents, out with cake; notes from the window
+  if (HOUSE_T > 0.5) { HP.note -= dt;
+    if (HP.note < 0) { HP.note = rand(0.45, 1.0);
+      parts.push({ kind: "note", x: LAY.cottage.x + 19 + rand(-6, 6), y: LAY.B - 48, vx: rand(-14, 14), vy: -30, life: 1.9, max: 1.9, col: pick(["#3B5FA8", "#E86A5B", "#4E9A5A", "#E68AB0"]) }); }
+    if (nightness < 0.35 && WX.storm < 0.5) { HP.guest -= dt;
+      if (HP.guest < 0) { HP.guest = rand(4, 9);
+        if (WALKERS.length < 14) { var side = DOORS[pick(["left", "right", "mill", "post", "pub"])];
+          if (Math.random() < 0.7) errand(side, DOORS.cottage, { carry: ICON.gift });
+          else errand(DOORS.cottage, DOORS[pick(["left", "right", "mill", "post"])], {}).v.happy = 3; } } }
+  } else HP.guest = Math.min(HP.guest, 2);
   // fireworks after dark
   if (PARTY_T > 0.5 && DARK > 0.45) { PARTY.fwT = (PARTY.fwT || 0) - dt;
     if (PARTY.fwT < 0) { PARTY.fwT = rand(0.5, 1.3); ROCKETS.push({ x: rand(W * 0.36, W * 0.72), y: HZ + 10, ty: rand(80, 140), col: pick(["#FF6B6B", "#FFD35C", "#7BE07F", "#6CB8FF", "#FF8FD1"]) }); } }
@@ -2339,8 +2805,163 @@ function drawFireworks() {
     byCol[c].forEach(function (p) { ctx.globalAlpha = 1; ctx.moveTo(p.x + 2.2, p.y); ctx.arc(p.x, p.y, 2.2 * (0.5 + p.life / p.max), 0, 7); }); ctx.fill(); });
 }
 function drawPartyBack(time) {
+  if (PARTY_T > 0.01) { ctx.globalAlpha = PARTY_T; ctx.drawImage(BUNTING, 0, LAY.B - 110, W, 90); ctx.globalAlpha = 1; }
+  if (HOUSE_T > 0.01) drawHouseBack(time);
+}
+// The house party's dressing on the cottage: bunting on the roof, balloons at the
+// door, and the name on a card over the chimney. Drawn before the walkers, so a
+// guest at the door stands in front of it.
+function drawHouseBack(time) {
+  var x = LAY.cottage.x, B = LAY.B, i, b;
+  ctx.globalAlpha = HOUSE_T;
+  blit(SHOP.bunting, x - 2, B - 60, 1, 1, 1, 1);
+  for (i = 0; i < HBAL.length; i++) { b = HBAL[i]; var bx = b.x + Math.sin(time * 1.3 + b.ph) * 3, by = b.y - b.len + Math.sin(time * 1.8 + b.ph) * 2.5;
+    ctx.strokeStyle = "rgba(90,80,70,.7)"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.quadraticCurveTo(b.x + 3, (b.y + by) / 2, bx, by + 9); ctx.stroke();
+    ctx.fillStyle = b.col; ctx.beginPath(); ctx.ellipse(bx, by, 7, 9.5, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,.55)"; ctx.beginPath(); ctx.ellipse(bx - 2.3, by - 3, 2, 2.8, 0, 0, 7); ctx.fill(); }
+  if (HOUSE && HOUSE.label !== HP.key) { HP.key = HOUSE.label; HP.card = bakeCard(HOUSE.label); }
+  if (HP.card) ctx.drawImage(HP.card.c, x - HP.card.w / 2, B - 116 - HP.card.h + Math.sin(time * 1.6) * 2, HP.card.w, HP.card.h);
+  ctx.globalAlpha = 1;
+}
+function bakeCard(text) {
+  var f = "600 " + 17 * K + "px Fredoka", g0 = canvas(10, 10).getContext("2d"); g0.font = f;
+  var w = g0.measureText(text).width + 24 * K, h = 28 * K, c = canvas(w + 4 * K, h + 10 * K), g = c.getContext("2d"), x = 2 * K, y = 2 * K;
+  g.fillStyle = "rgba(255,255,255,.95)"; g.strokeStyle = "#E86A5B"; g.lineWidth = 2 * K; rr(g, x, y, w, h, h / 2); g.fill(); g.stroke();
+  g.beginPath(); g.moveTo(x + w / 2 - 6 * K, y + h - 1); g.lineTo(x + w / 2, y + h + 7 * K); g.lineTo(x + w / 2 + 6 * K, y + h - 1); g.fill();
+  g.fillStyle = "#26352C"; g.font = f; g.textBaseline = "middle"; g.textAlign = "center"; g.fillText(text, x + w / 2, y + h / 2 + K);
+  return { c: c, w: c.width / K, h: c.height / K };
+}
+// The cottage window in party colours, on top of the dusk so it reads as lit.
+function drawHouseLights(time) {
+  if (HOUSE_T <= 0.01) return;
+  var x = LAY.cottage.x, B = LAY.B, cols = ["255,212,120", "255,150,190", "150,200,255", "190,255,170"], k = time * 1.6, i = Math.floor(k) & 3, u = k - Math.floor(k);
+  ctx.fillStyle = "rgba(" + cols[i] + "," + (HOUSE_T * (0.55 + 0.35 * DARK)).toFixed(2) + ")"; rr(ctx, x + 6, B - 44, 26, 20, 4); ctx.fill();
+  ctx.fillStyle = "rgba(" + cols[(i + 1) & 3] + "," + (HOUSE_T * u * (0.55 + 0.35 * DARK)).toFixed(2) + ")"; rr(ctx, x + 6, B - 44, 26, 20, 4); ctx.fill();
+  if (DARK > 0.1) { ctx.fillStyle = "rgba(" + cols[i] + "," + (HOUSE_T * DARK * 0.18).toFixed(2) + ")"; ctx.beginPath(); ctx.ellipse(x + 19, B + 4, 60, 16, 0, 0, 7); ctx.fill(); }   // spill on the road
+}
+// The rave's lights, over the dusk and under the tags. Flat fills, lines and one
+// baked ball: nothing per-frame that Chrome 87 on the panel would sulk at.
+function makePartySprites(cols) {
+  var x = LAY.cottage.x, B = LAY.B, i;
+  HBAL = [[x - 36, B - 34], [x + 40, B - 30], [x + 47, B - 36]].map(function (a, i) { return { x: a[0], y: a[1], ph: rand(0, 6), col: cols[(i * 2 + 1) % cols.length], len: rand(28, 42) }; });
+  SPOTS = []; for (i = 0; i < 12; i++) SPOTS.push({ x: rand(W * 0.05, W * 0.95), y: rand(TOP + 70, H - 30), ph: rand(0, 6), hue: (i * 47) % 360 });
+  DISCO = icon(60, 60, function (g) { g.fillStyle = "#8A93A6"; g.beginPath(); g.arc(30, 30, 28, 0, 7); g.fill();
+    for (var r = 0; r < 8; r++) for (var c = 0; c < 8; c++) { var fx = 3 + c * 6.8, fy = 3 + r * 6.8, dx = fx + 3 - 30, dy = fy + 3 - 30; if (dx * dx + dy * dy > 26 * 26) continue;
+      g.fillStyle = ((r + c) % 3 === 0) ? "#F4F7FF" : ((r + c) % 3 === 1) ? "#C9D2E6" : "#A6B0C6"; g.fillRect(fx, fy, 5.8, 5.8); }
+    g.fillStyle = "rgba(255,255,255,.55)"; g.beginPath(); g.ellipse(21, 19, 9, 6, -0.7, 0, 7); g.fill(); });
+}
+function drawRaveLights(time) {
   if (PARTY_T <= 0.01) return;
-  ctx.globalAlpha = PARTY_T; ctx.drawImage(BUNTING, 0, LAY.B - 110, W, 90); ctx.globalAlpha = 1;
+  var a = PARTY_T, beat = Math.sin(time * RAVE_W), pump = Math.max(0, beat), glow = 0.6 + 0.8 * DARK, i, hue = (time * 36) % 360 | 0;
+  // colour wash, on the beat
+  ctx.fillStyle = "hsla(" + hue + ",90%,60%," + (a * (0.07 + 0.09 * pump) * glow).toFixed(3) + ")"; ctx.fillRect(0, 0, W, H);
+  // ground spots, drifting, each its own colour
+  for (i = 0; i < SPOTS.length; i++) { var s = SPOTS[i], sx = s.x + Math.sin(time * 0.8 + s.ph) * 46, sy = s.y + Math.sin(time * 0.5 + s.ph * 1.7) * 12, r = 26 + 9 * pump;
+    ctx.fillStyle = "hsla(" + ((s.hue + hue) % 360) + ",95%,65%," + (a * 0.27 * glow).toFixed(3) + ")"; ctx.beginPath(); ctx.ellipse(sx, sy, r, r * 0.42, 0, 0, 7); ctx.fill(); }
+  // lasers, fanned up from the bandstand and the pitch
+  ctx.globalCompositeOperation = "lighter"; ctx.lineWidth = 3; ctx.lineCap = "round";
+  var rigs = [[LAY.band.x, LAY.band.y - 70, 1], [LAY.pitch.x, LAY.pitch.y - 40, -1]];
+  for (var g = 0; g < rigs.length; g++) { var rx = rigs[g][0], ry = rigs[g][1];
+    for (i = 0; i < 4; i++) { var th = rigs[g][2] * (i - 1.5) * 0.28 + Math.sin(time * 1.5 + i * 1.3 + g * 2) * 0.55, len = ry + 30;
+      ctx.strokeStyle = "hsla(" + ((hue + 90 * i + g * 45) % 360) + ",100%,65%," + (a * (0.22 + 0.18 * pump) * glow).toFixed(3) + ")";
+      ctx.beginPath(); ctx.moveTo(rx, ry); ctx.lineTo(rx + Math.tan(th) * len, -30); ctx.stroke(); } }
+  ctx.globalCompositeOperation = "source-over";
+  // the glitter ball, hung over the road above the plane's lane, with its glints on the sky
+  var cx = W / 2, cy = 92, R = 26;
+  ctx.globalAlpha = a; ctx.strokeStyle = "rgba(60,60,70,.7)"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, cy - R); ctx.stroke();
+  ctx.save(); ctx.translate(cx, cy); ctx.scale(1 / K, 1 / K); ctx.drawImage(DISCO.c, -30 * K, -30 * K); ctx.restore();
+  ctx.fillStyle = "#FFFFFF";
+  for (i = 0; i < 7; i++) { var ga = time * 1.4 + i * 0.9, gx = Math.cos(ga) * R * 0.78, gy = Math.sin(i * 2.3) * R * 0.6, gl = Math.max(0, Math.cos(ga));
+    if (gl < 0.15) continue; ctx.globalAlpha = a * gl; ctx.fillRect(cx + gx - 2, cy + gy - 2, 4, 4); }
+  for (i = 0; i < 10; i++) { var pa = time * 0.7 + i * 0.628, pr = 70 + 45 * ((i * 7) % 3), px = cx + Math.cos(pa) * pr * 1.8, py = cy + Math.sin(pa) * pr * 0.55;
+    ctx.globalAlpha = a * (0.25 + 0.35 * pump) * glow; ctx.fillStyle = "hsla(" + ((hue + i * 36) % 360) + ",100%,80%,1)"; ctx.beginPath(); ctx.arc(px, py, 5, 0, 7); ctx.fill(); }
+  ctx.globalAlpha = 1;
+}
+// ── The bandstand show, while the speaker plays music ──────────────────────────
+// The stage becomes the centre of the party: a warm pool of light, the canopy's
+// bulbs chasing on the beat, coloured spots on the grass round it, two pairs of
+// lasers sweeping up off the canopy, a glitter ball under the roof throwing specks
+// across the stage and the grass, and a lit sign on the roof finial with what's
+// playing. Lines, fills and one baked sign: no blur, no filters. The rave owns the
+// lights when both are on (the show fades by 1 - PARTY_T); the sign stays.
+// Bedtime calms it: once the family is asleep the lasers, spots and bulb chase go
+// out and the ball turns on for a nightlight, specks dimmed, sign still lit.
+// Too long: drop a "(... remix)", " - Live" or " feat. ..." tail first, then cut at a word with an ellipsis.
+function trunc(g, text, max) {
+  if (g.measureText(text).width <= max) return text;
+  var core = text.replace(/\s*[(\[].*$/, "").replace(/\s+-\s+.*$/, "").replace(/\s+(feat\.?|ft\.|featuring)\s.*$/i, "");
+  if (core && core !== text && g.measureText(core).width <= max) return core;
+  text = core || text;
+  while (text.length > 1 && g.measureText(text + "…").width > max) text = text.slice(0, -1);
+  var sp = text.lastIndexOf(" "); if (sp > text.length * 0.6) text = text.slice(0, sp);
+  return text.replace(/[\s,.(\-&]+$/, "") + "…";
+}
+function bakeSign(title, artist) {
+  var ft = "600 " + 18 * K + "px Fredoka", fa = "500 " + 14 * K + "px Fredoka", max = 260 * K;
+  var g0 = canvas(10, 10).getContext("2d"), t, a = null;
+  g0.font = ft; t = trunc(g0, title, max); var tw = g0.measureText(t).width;
+  var aw = 0; if (artist) { g0.font = fa; a = trunc(g0, artist, max); aw = g0.measureText(a).width; }
+  var pad = 14 * K, w = Math.max(tw, aw) + pad * 2 + 18 * K, h = (a ? 50 : 32) * K, c = canvas(w + 4 * K, h + 4 * K), g = c.getContext("2d"), x = 2 * K, y = 2 * K;
+  g.fillStyle = "#FFF6E3"; g.strokeStyle = "#8D6440"; g.lineWidth = 2.5 * K; rr(g, x, y, w, h, 9 * K); g.fill(); g.stroke();
+  g.fillStyle = "#D9534F"; var nx = x + pad + 4 * K, ny = y + h / 2;                    // a little red note, the bandstand's colour
+  g.beginPath(); g.ellipse(nx - 2 * K, ny + 5 * K, 4.5 * K, 3.4 * K, -0.3, 0, 7); g.fill();
+  g.fillRect(nx + 1.6 * K, ny - 9 * K, 2 * K, 14 * K); g.fillRect(nx + 1.6 * K, ny - 9 * K, 7 * K, 2.4 * K);
+  g.textAlign = "left"; g.textBaseline = "middle"; var tx = x + pad + 18 * K;
+  g.fillStyle = "#3B2A1E"; g.font = ft; g.fillText(t, tx, a ? y + 17 * K : y + h / 2 + K);
+  if (a) { g.fillStyle = "#86654A"; g.font = fa; g.fillText(a, tx, y + 36 * K); }
+  return { c: c, w: c.width / K, h: c.height / K };
+}
+function drawBandShow(time) {
+  if (MUSIC_T <= 0.01) return;
+  var bx = LAY.band.x, by = LAY.band.y, i;
+  var awake = 1 - clamp((nightness - 0.3) / 0.3, 0, 1);       // 0 once the family is asleep
+  var a = MUSIC_T * (1 - PARTY_T), live = a * awake, glow = 0.55 + 0.45 * DARK;
+  var beat = Math.sin(clockT * MUSIC_W), pump = Math.max(0, beat), hue = (time * 30) % 360 | 0;
+  if (a > 0.01) {
+    ctx.globalCompositeOperation = "lighter";
+    // warm pool on the stage and the grass in front, breathing with the beat
+    ctx.fillStyle = "rgba(255,170,90," + (a * (0.10 + 0.08 * pump * awake) * glow).toFixed(3) + ")";
+    ctx.beginPath(); ctx.ellipse(bx, by - 8, 130, 38, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = "rgba(255,200,130," + (a * 0.10 * glow).toFixed(3) + ")"; ctx.fillRect(bx - 66, by - 88, 132, 84);
+    if (live > 0.01) {
+      // coloured spots on the grass round the stage
+      for (i = 0; i < 6; i++) { var sa = time * 0.7 + i * 1.05, sx = bx + Math.cos(sa) * (110 + 40 * (i % 2)), sy = by - 30 + Math.sin(sa) * 30, r = 22 + 7 * pump;
+        ctx.fillStyle = "hsla(" + ((hue + i * 60) % 360) + ",95%,62%," + (live * 0.22 * glow).toFixed(3) + ")"; ctx.beginPath(); ctx.ellipse(sx, sy, r, r * 0.42, 0, 0, 7); ctx.fill(); }
+      // lasers off the canopy's corners, sweeping, ending over the meadow (clear of the clock)
+      ctx.lineWidth = 2.5; ctx.lineCap = "round";
+      for (var c = -1; c <= 1; c += 2) { var ox = bx + c * 70, oy = by - 90;
+        for (i = 0; i < 2; i++) { var th = c * (0.25 + i * 0.35) + Math.sin(time * 1.3 + i * 1.9 + c) * 0.45, len = 330;
+          ctx.strokeStyle = "hsla(" + ((hue + 120 * i + (c > 0 ? 60 : 0)) % 360) + ",100%,62%," + (live * (0.2 + 0.2 * pump) * glow).toFixed(3) + ")";
+          ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ox + Math.sin(th) * len, oy - Math.cos(th) * len); ctx.stroke(); } }
+    }
+    // the glitter ball's specks: a fixed set, carried round by the ball's turn
+    if (!SPECKS.length) for (i = 0; i < 32; i++) SPECKS.push({ lon: i * 2.4, rad: 40 + (i * 37) % 170, sq: 0.22 + 0.1 * ((i * 5) % 3), s: 2 + (i % 3), tw: i * 1.7 });
+    var rot = time * 0.55, cy = by - 40;
+    for (i = 0; i < SPECKS.length; i++) { var p = SPECKS[i], ang = p.lon + rot, px = bx + Math.cos(ang) * p.rad * 1.4, py = cy + 30 + Math.sin(ang) * p.rad * p.sq;
+      var tw = 0.55 + 0.45 * Math.sin(time * 3 + p.tw);
+      ctx.fillStyle = "rgba(255,250,235," + (a * (0.25 + 0.5 * awake) * tw).toFixed(3) + ")"; ctx.fillRect(px - p.s / 2, py - p.s / 2, p.s, p.s); }
+    ctx.globalCompositeOperation = "source-over";
+    // canopy bulbs, chasing on the beat (steady at night)
+    for (i = 0; i < 9; i++) { var on = awake > 0.5 ? ((i + Math.floor(clockT * MUSIC_W / Math.PI)) % 3 === 0) : true;
+      ctx.fillStyle = on ? "hsla(" + ((hue + i * 40) % 360) + ",100%,72%," + a.toFixed(3) + ")" : "rgba(255,240,210," + (a * 0.35).toFixed(3) + ")";
+      ctx.beginPath(); ctx.arc(bx - 80 + i * 20, by - 87, on ? 3.2 : 2.4, 0, 7); ctx.fill(); }
+    // the glitter ball itself, hung under the canopy's peak; facets roll round as it turns
+    var gx = bx, gy = by - 72, R = 10;
+    ctx.globalAlpha = a; ctx.strokeStyle = "rgba(60,60,70,.8)"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(gx, by - 88); ctx.lineTo(gx, gy - R); ctx.stroke();
+    ctx.fillStyle = "#8A93A6"; ctx.beginPath(); ctx.arc(gx, gy, R, 0, 7); ctx.fill();
+    for (var la = -2; la <= 2; la++) { var lat = la * 0.5, cl = Math.cos(lat);
+      for (var lo = 0; lo < 8; lo++) { var l = lo * 0.785 + rot * 2, z = Math.cos(l); if (z < 0.1) continue;
+        var fx = gx + Math.sin(l) * R * 0.85 * cl, fy = gy + Math.sin(lat) * R * 0.85, b = 160 + 95 * z * cl | 0;
+        ctx.fillStyle = "rgb(" + b + "," + b + "," + Math.min(255, b + 15) + ")"; ctx.fillRect(fx - 1.4, fy - 1.4, 2.8, 2.8); } }
+    ctx.fillStyle = "rgba(255,255,255,.8)"; ctx.fillRect(gx - 4 + Math.sin(time * 2.2) * 2, gy - 5, 2.5, 2.5);
+    ctx.globalAlpha = 1;
+  }
+  // what's playing, on a lit sign up on the roof finial
+  var key = (MUSIC.title || "") + "|" + (MUSIC.artist || "");
+  if (key !== SIGN_KEY) { SIGN_KEY = key; SIGN = MUSIC.title ? bakeSign(MUSIC.title, MUSIC.artist) : SIGN; }   // keeps the last one while it fades
+  if (SIGN) { var sx0 = bx - SIGN.w / 2, sy0 = by - 146 - SIGN.h + Math.sin(clockT * MUSIC_W * 0.5) * 1.5 * awake;
+    ctx.globalAlpha = MUSIC_T; ctx.fillStyle = "#8D6440"; ctx.fillRect(bx - 1.5, sy0 + SIGN.h - 4, 3, by - 134 - (sy0 + SIGN.h - 4));
+    ctx.drawImage(SIGN.c, sx0, sy0, SIGN.w, SIGN.h); ctx.globalAlpha = 1; }
 }
 function drawPartyFront(time) {
   if (PARTY_T <= 0.01) return;
@@ -2390,7 +3011,7 @@ function drawThing(t, time) {
   var dance = DANCE && nightness < 0.6 && !t.moving && t !== openThing && Math.abs(t.x - DANCE.x) + Math.abs(t.y - DANCE.y) < DANCE.r;
   var spr = nightness > 0.6 ? t.spr.shut : (t.happy > 0 || t.munch > 0 || dance) ? t.spr.happy : t.blinkT > 0 ? t.spr.shut : t.spr.open;
   var sy = 1, sx = 1;
-  if (dance) { var bt = Math.sin(DANCE.k * 7 + t.phase * 2); sy = 1 + 0.06 * bt; sx = 1 / sy; hop += Math.max(0, bt) * 3; }
+  if (dance) { var bt = Math.sin(DANCE.k * 7 + t.phase * 2); sy = 1 + (DANCE.sq || 0.06) * bt; sx = 1 / sy; hop += Math.max(0, bt) * (DANCE.amp || 3); }
   else if (t.gait > 0.05 && !(t.person && t.person.look === "snail")) { var land = (1 - Math.abs(Math.sin(t.phase))) * t.gait; sy = 1 - 0.14 * land * land * land; sx = 1 + 0.1 * land * land * land; }
   else if (t.munch > 0) { sy = 1 + 0.05 * Math.sin(time * 22); sx = 1 / sy; }
   else { sy = 1 + 0.025 * Math.sin(time * 2.2 + t.phase); sx = 1 / sy; }
@@ -2407,6 +3028,7 @@ function drawThing(t, time) {
   if (look === "deer" && t.graze > 0) {                  // head down to graze
     var gz = Math.min(1, t.graze / 0.4, 1); lean += t.face * 0.22 * gz; sy *= 1 - 0.05 * gz; }
   if (t.shiny) drawShiny(t.shiny.x, t.shiny.y, time);
+  if (dance && DANCE.wig) lean += DANCE.wig * Math.sin(DANCE.k * 3.5 + t.phase * 2);   // the rave's side-to-side
   ctx.save(); ctx.translate(t.x, t.y - hop);
   if (lean) ctx.rotate(lean);
   if (t.peck > 0) ctx.rotate(t.face * 0.4 * Math.sin((1 - t.peck / 0.5) * Math.PI));      // the crow stoops for it
@@ -2473,7 +3095,7 @@ function draw(time) {
   drawPlane(time);
   for (i = 0; i < food.length; i++) { var f = food[i], fs = f.grow * 0.8 / K * depth(f.y);
     ctx.drawImage(f.spr.c, f.x - f.spr.ax * fs, f.y - f.spr.ay * fs, f.spr.c.width * fs, f.spr.c.height * fs); }
-  for (i = 0; i < things.length; i++) { t = things[i]; if (t.person && t.person.look === "shark") continue;
+  for (i = 0; i < things.length; i++) { t = things[i]; if ((t.person && t.person.look === "shark") || offStage(t)) continue;
     var s = depth(t.y) * t.grow, hs = 1 - Math.min(0.5, hopOf(t) / (t.r * 3)), sw = t.r * 2.6 * s * hs;
     ctx.drawImage(SHADOW, t.x - sw / 2, t.y - sw * 0.14, sw, sw * 0.28); }
   var asleep = nightness > 0.6; clockT = time;
@@ -2481,12 +3103,14 @@ function draw(time) {
   drawPartyBack(time);
   drawWalkers();
   for (i = 0; i < VILLAGE.length; i++) if (VILLAGE[i].late) VILLAGE[i].draw(time, asleep);
-  var order = things.slice().sort(function (a, b) { return a.y - b.y; });
-  for (i = 0; i < order.length; i++) drawThing(order[i], time);
+  var order = things.slice().sort(function (a, b) { return a.y - b.y; }), robo = !ROBOT;
+  for (i = 0; i < order.length; i++) { if (!robo && ROBOT.y < order[i].y) { drawRobot(time); robo = true; }
+    if (!offStage(order[i])) drawThing(order[i], time); }
+  if (!robo) drawRobot(time);
   for (i = 0; i < VILLAGE.length; i++) if (VILLAGE[i].layer === "front") VILLAGE[i].draw(time, asleep);
   drawPartyFront(time);
   // The bee, in a lazy figure of eight around whoever has bee: true
-  var bh = BEE_HOST; if (bh) { var bx = bh.x + Math.sin(time * 1.3) * 44, by = bh.y - bh.r * 1.4 - hopOf(bh) + Math.sin(time * 2.6) * 12;
+  var bh = BEE_HOST; if (bh && !offStage(bh)) { var bx = bh.x + Math.sin(time * 1.3) * 44, by = bh.y - bh.r * 1.4 - hopOf(bh) + Math.sin(time * 2.6) * 12;
     if (nightness > 0.6) { bx = bh.x - bh.face * bh.r * 0.3; by = bh.y - bh.r * 1.28; }   // asleep on the sleeper's back
     ctx.fillStyle = "rgba(255,255,255,.75)"; ctx.beginPath(); ctx.ellipse(bx - 2, by - 6 - (nightness > 0.6 ? 0 : Math.abs(Math.sin(time * 40)) * 3), 5, 3.5, -0.4, 0, 7); ctx.fill();
     ctx.fillStyle = "#FFCB3D"; ctx.beginPath(); ctx.ellipse(bx, by, 7, 5.5, 0, 0, 7); ctx.fill();
@@ -2524,13 +3148,20 @@ function draw(time) {
       ctx.globalAlpha = DARK * (0.3 + 0.7 * pulse); ctx.drawImage(GLOW, fl.x - 12, fl.y - 12, 24, 24); }
     ctx.globalAlpha = 1;
   }
+  drawRaveLights(time); drawHouseLights(time); drawBandShow(time);  // over the dusk, under the tags
   // the school's tag: it is a tap target like the family
   var stg = TAGS.School; if (stg && LAY.school) { var sx0 = LAY.school.x - stg.w / 2, sy0 = LAY.school.y - 144 - stg.h;
     ctx.drawImage(stg.c, sx0, sy0, stg.w, stg.h); SCHOOL_CARD.tagBox = [sx0, sy0, stg.w, stg.h]; }
-  // name tags last, so night never hides who is who
+  // the workshop's board: the percent on the fence while a job is on (a tag above
+  // would sit on the road, the plot is that close under it)
+  var bd = shopBoard(); if (bd) ctx.drawImage(bd.c, LAY.shop.x - 60 - bd.w / 2, LAY.shop.y - 30 - bd.h, bd.w, bd.h);
+  // name tags last, so night never hides who is who; a letter rides above the tag
   for (i = 0; i < fam.length; i++) { t = fam[i]; var tag = TAGS[t.person.name]; if (!tag) continue;
+    if (offStage(t)) { t.tagBox = null; continue; }
     var sc = depth(t.y), top = t.y + (t.dy || 0) - hopOf(t) * sc - t.r * sc * t.person.tg;
-    ctx.drawImage(tag.c, t.x - tag.w / 2, top - tag.h, tag.w, tag.h); t.tagBox = [t.x - tag.w / 2, top - tag.h, tag.w, tag.h]; }
+    ctx.drawImage(tag.c, t.x - tag.w / 2, top - tag.h, tag.w, tag.h); t.tagBox = [t.x - tag.w / 2, top - tag.h, tag.w, tag.h];
+    if (t.letter) blit(ICON.letter, t.x, top - tag.h - 6 + Math.sin(time * 2.4 + t.phase) * 2.5, 1, 1, 1, 2, Math.sin(time * 1.8) * 0.12); }
+  drawRobotBubble(time);                                   // the office robot's line, above the night like the tags
 }
 
 // ── Time of day ─────────────────────────────────────────────────────────────
@@ -2561,6 +3192,18 @@ function getState(id, tok) {
   return fetch("/api/states/" + id, { headers: { Authorization: "Bearer " + tok } })
     .then(function (r) { if (!r.ok) throw new Error(id + " returned " + r.status); return r.json(); });
 }
+// Trips from the family calendar, a year ahead. The REST calendar endpoint gives
+// all-day events as {date} and timed ones as {dateTime}; either way the day is the
+// first ten characters. A failure leaves the trips out and says so in the console.
+function holidays(tok) {
+  if (!SENSORS.trips) return Promise.resolve([]);
+  var td = ymd(now()), end = (+td.slice(0, 4) + 1) + td.slice(4);
+  return fetch("/api/calendars/" + SENSORS.trips + "?start=" + td + "T00:00:00&end=" + end + "T00:00:00", { headers: { Authorization: "Bearer " + tok } })
+    .then(function (r) { if (!r.ok) throw new Error(SENSORS.trips + " returned " + r.status); return r.json(); })
+    .then(function (evs) { return evs.filter(function (e) { return /\bholidays?\b/i.test(e.summary || ""); }).map(function (e) {
+      return { date: (e.start.date || e.start.dateTime).slice(0, 10), label: e.summary.replace(/\bholidays?\b/i, "").replace(/^[\s:,-]+|[\s:,-]+$/g, "") || "Holiday" }; }); })
+    .catch(function (e) { console.warn("meadow: holidays", e); return null; });
+}
 function load() {
   if (DEMO) { DATA = demoData(); DATA.events = byStart(DATA.events); refreshTags(); return; }
   var schoolErr = null;
@@ -2570,13 +3213,14 @@ function load() {
       return getState(id, tok).catch(function (e) { console.warn("meadow: " + id, e); schoolErr = e.message || String(e); return null; }); }
     return Promise.all([getState(SENSORS.week, tok), getState(SENSORS.extra, tok),
       opt(SENSORS.timetable), opt(SENSORS.kit), opt(SENSORS.lunch),
-      opt(SENSORS.sun), opt(SENSORS.weather)]); })
+      opt(SENSORS.sun), opt(SENSORS.weather), holidays(tok)]); })
     .then(function (s) {
       var wk = s[0].attributes || {};
       if (!Array.isArray(wk.events)) throw new Error(SENSORS.week + " has no events list (state " + s[0].state + ")");
       DATA = { events: byStart(wk.events), weekAt: wk.checked_at ? new Date(wk.checked_at) : null, extra: s[1].attributes || null, error: null, gotAt: new Date(),
         school: { timetable: s[2] ? Object.assign({ state: s[2].state }, s[2].attributes) : null, kit: s[3] && s[3].attributes, lunch: s[4] && s[4].attributes, err: schoolErr },
-        sun: s[5] && s[5].attributes, weather: s[6] ? { state: s[6].state, attributes: s[6].attributes } : null };
+        sun: s[5] && s[5].attributes, weather: s[6] ? { state: s[6].state, attributes: s[6].attributes } : null,
+        holidays: s[7] || (DATA.holidays || []) };                                // a failed fetch keeps the last good list
       refreshTags();
     })
     .catch(function (e) { console.error("meadow: load failed", e); DATA.error = e.message || String(e); });
@@ -2588,9 +3232,13 @@ function demoData() {
   function ev(who, what, w) { w.who = who; w.what = what; return w; }
   return {
     weekAt: now(), gotAt: now(), error: null,
+    // Today's timed events exercise the day plan: ?hour=10 sends Alex out to the
+    // dentist while the kids are at school, 15.5 puts Mia at the bandstand, 16.5
+    // Ivy at the pond, 17 Rory on the pitch, 19.5 Jo out. Pat's birthday is a
+    // friend's, so from 17 there is a house party at the cottage (see Parties).
     events: [
-      ev("House", "Bin day", ad(0)), ev("Jo", "Book club", at(0, "19:30")), ev("Rory", "Football training", at(0, "17:00")),
-      ev("Mia", "Drama club", at(0, "15:30")), ev("Ivy", "Swimming", at(1, "18:45")), ev("Alex", "Dentist", at(1, "09:40")),
+      ev("House", "Bin day", ad(0)), ev("Jo", "Pat's birthday", ad(0)), ev("Alex", "Dentist", at(0, "10:15")), ev("Jo", "Book club", at(0, "19:30")), ev("Rory", "Football training", at(0, "17:00")),
+      ev("Mia", "Drama club", at(0, "15:30")), ev("Ivy", "Swimming", at(0, "16:30")), ev("Alex", "Dentist", at(1, "09:40")),
       ev("Mia", "Sleepover at Ella's", ad(2)), ev("Ivy", "Cubs", at(2, "18:30")), ev("Rory", "Mock exams start", ad(3)),
       ev("House", "Window cleaner", ad(4)), ev("Jo", "Late shift", at(4, "14:00"))
     ],
@@ -2599,10 +3247,11 @@ function demoData() {
         grid: { "Week 1": { Monday: ["Maths|M1", "English|E2", "Science|S3", "History|H1", "Art|A1"], Tuesday: ["French|L2", "Maths|M1", "English|E2", "Music|MU", "Drama|D1"],
           Wednesday: ["Maths|M1", "English|E2", "Core PE|Gym", "Science|S3", "Art|A1"], Thursday: ["History|H1", "Maths|M1", "French|L2", "Music|MU", "English|E2"],
           Friday: ["Science|S3", "Geography|G1", "Maths|M1", "Core PE|Gym", "English|E2"] } } },
-      kit: { kit_today: "PE kit" }, lunch: { status_today: "served", served_today: true, main_today: "Pasta bake", veg_today: "Veggie pasta bake", pudding_today: "Apple crumble",
+      kit: { kit_today: "PE kit", kit_tomorrow: "Swimming kit" }, lunch: { status_today: "served", served_today: true, main_today: "Pasta bake", veg_today: "Veggie pasta bake", pudding_today: "Apple crumble",
         status_tomorrow: "served", served_tomorrow: true, main_tomorrow: "Fish fingers", veg_tomorrow: "Veggie fingers", pudding_tomorrow: "Yoghurt" } },
     extra: { checked_at: now().toISOString(), kit: [{ who: "Ivy", what: "PE kit on Fridays" }], flags: ["Half term starts in three weeks"],
-      schools: [{ who: "Mia", school: "Demo High", terms: [{ label: "Term 1", from: d(-20), to: d(24) }, { label: "Term 2", from: d(34), to: d(80) }], days: [{ date: d(9), what: "INSET, closed" }] }],
+      schools: [{ who: "Mia", school: "Demo High", terms: [{ label: "Term 1", from: d(-20), to: d(24) }, { label: "Term 2", from: d(34), to: d(80) }], days: [{ date: d(9), what: "INSET, closed" }] },
+        { who: "Rory", school: "Demo College", terms: [{ label: "Term 1", from: null, to: d(22), note: "start not published" }, { label: "Term 2", from: d(32), to: null }], days: [] }],
       sources: { ok: ["demo"], unavailable: ["jo-mail"] },
       items: [{ who: "Mia", date: d(2), kind: "homework", what: "Maths homework due" }, { who: "Ivy", date: d(1), kind: "kit", what: "Swimming kit" },
         { who: "Rory", date: d(9), kind: "event", what: "Parents evening" }, { who: "Alex", date: d(5), kind: "deadline", what: "School trip form back" }] }
@@ -2615,12 +3264,286 @@ function refreshTags() {
   var td = ymd(now()), n = ((DATA.extra || {}).items || []).filter(function (i) { return i.date === td && KIDS.indexOf(i.who) >= 0; }).length;
   TAGS.School = bakeTag({ name: "School", col: "#C9594A" }, n);
 }
+// The workshop's fence board: "45%" while printing or paused, a tick when done,
+// baked again only when the words change. Nothing while the plot is empty.
+var BOARD = { key: null, c: null, w: 0, h: 0 };
+function shopBoard() {
+  var ps = printerState(), txt = ps === "running" || ps === "pause" ? Math.round(PR.progress) + "%" : ps === "finish" ? "done" : /^(prepare|slicing|init)$/.test(ps) ? "soon" : null;
+  if (!txt) return null;
+  if (txt !== BOARD.key) {
+    var g0 = canvas(10, 10).getContext("2d"); g0.font = "600 " + 15 * K + "px Fredoka";
+    var w = g0.measureText(txt).width + 16 * K, h = 22 * K, c = canvas(w + 2 * K, h + 8 * K), g = c.getContext("2d");
+    g.fillStyle = "#B08A5A"; g.fillRect(w / 2 - K, h, 2 * K, 8 * K);
+    g.fillStyle = "#F2E8D8"; g.strokeStyle = "#7A5238"; g.lineWidth = 1.5 * K; rr(g, K, K, w, h - K, 3 * K); g.fill(); g.stroke();
+    g.fillStyle = INK; g.font = "600 " + 15 * K + "px Fredoka"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(txt, K + w / 2, h / 2 + K);
+    BOARD = { key: txt, c: c, w: c.width / K, h: c.height / K };
+  }
+  return BOARD;
+}
+// The kit bag by the cottage door (SCHOOL_WHO.kit's kit): mornings before school when the kit sensor
+// names kit for today, evenings when it names kit for tomorrow. The live sensor
+// only has kit_today so far; kit_tomorrow is read in case it grows one. No sensor,
+// no bag.
+function kitBag() {
+  var k = DATA.school && DATA.school.kit; if (!k) return null;
+  var d = now(), h = d.getHours(), v = h < 9 && weekday(d) ? k.kit_today : h >= 17 ? k.kit_tomorrow : null;
+  return v && v !== "none" && v !== "unknown" ? v : null;
+}
+
+// ── The printer ─────────────────────────────────────────────────────────────
+// The Bambu A1 Mini's sensors, polled on their own timer: the five minute week
+// poll is too slow to watch a build. remaining_time is hours as a float. Anything
+// older than six minutes, or a poll that failed, is "missing" and the plot empties:
+// a stale 45% must not keep a builder hammering.
+var PR = { status: "missing", progress: 0, remain: null, name: "", layer: null, layers: null, at: null };
+var PR_ID = SENSORS.printer, PR_KEYS = ["print_status", "print_progress", "remaining_time", "task_name", "current_layer", "total_layer_count"];
+function num(s) { var v = s && parseFloat(s.state); return isFinite(v) ? v : null; }
+function setPrinter(s) {
+  var st = s[0] && s[0].state, name = s[3] && s[3].state;
+  PR = { status: !s[0] ? "missing" : st === "unavailable" ? "offline" : st || "unknown",
+    progress: clamp(num(s[1]) || 0, 0, 100), remain: num(s[2]) == null ? null : Math.round(num(s[2]) * 60),
+    name: name && !/^(unknown|unavailable)$/.test(name) ? name.replace(/\.gcode(\.3mf)?$|\.3mf$/i, "").replace(/_/g, " ") : "",
+    layer: num(s[4]), layers: num(s[5]), at: new Date(), err: null };
+}
+// What the scene should show: a real status while the reading is fresh, else "empty".
+function printerState() {
+  if (!PR.at || Date.now() - PR.at > 6 * 60000) return "empty";
+  return /^(running|pause|prepare|slicing|init|finish|failed|idle)$/.test(PR.status) ? PR.status : "empty";
+}
+function demoPrinter() {
+  var m = (PRFORCE || "running:38").split(":"), st = m[0], p = m[1] != null ? +m[1] : st === "finish" ? 100 : st === "failed" ? 61 : /^(idle|offline|unknown|missing)$/.test(st) ? 0 : 38;
+  return { status: st === "missing" ? "missing" : st, progress: p, remain: st === "running" || st === "pause" ? Math.round((100 - p) * 1.3) : 0,
+    name: "Articulated Dragon", layer: Math.round(p * 1.25), layers: 125, at: st === "missing" ? null : new Date(), err: null };
+}
+
+// ── Letters ─────────────────────────────────────────────────────────────────
+// SENSORS.letter (an input_text helper), typed on a phone as "Ivy: tea's at six". The name
+// picks who gets it (no name, or one the meadow does not know, and it goes to the
+// House); the postie carries it over; they wear it above their tag until their
+// card is opened, which shows it and clears the helper so the next note is new.
+// The key is text plus last_changed, so the same words sent twice count twice.
+// If the clear fails the letter is still remembered here, the corner says so, and
+// the poll keeps ignoring that key until the text changes.
+var LETTER = { seen: null, queue: [], clearErr: null };
+function letterArrived(text, key) {
+  if (key === LETTER.seen) return;
+  LETTER.seen = key;
+  var m = String(text).match(/^\s*([A-Za-z]+)\s*[:,\-]\s*([\s\S]*)$/), who = null, body = text;
+  if (m) { var nm = m[1].toLowerCase();
+    who = PEOPLE.filter(function (p) { return [p.name].concat(p.aliases || []).some(function (a) { return a.toLowerCase() === nm; }); })[0]; if (who) body = m[2]; }
+  if (!who) who = PEOPLE[PEOPLE.length - 1];
+  LETTER.queue.push({ to: who.name, text: String(body).trim() || String(text), at: new Date(), key: key });
+}
+function clearLetter(l) {
+  if (DEMO || l.key === "hook" || !SENSORS.letter) return;
+  hassToken().then(function (tok) {
+    return fetch("/api/services/input_text/set_value", { method: "POST", headers: { Authorization: "Bearer " + tok, "Content-Type": "application/json" },
+      body: JSON.stringify({ entity_id: SENSORS.letter, value: "" }) });
+  }).then(function (r) { if (!r.ok) throw new Error("set_value returned " + r.status); LETTER.clearErr = null; })
+    .catch(function (e) { console.warn("meadow: could not clear the letter", e); LETTER.clearErr = e.message || String(e); });
+}
+// The music poll, every 10s: one player, so a pause stops the dancing within seconds.
+// SENSORS.music is the panel's universal player (follows input_select.music_target).
+// Music means playing, content type music, and not a podcast, audiobook or a bare .mp3
+// URL (the Six O'Clock News tile plays the BBC enclosure that way). Radio counts.
+var MUSIC_ID = SENSORS.music;
+function isMusic(s) {
+  if (!s || s.state !== "playing") return false;
+  var a = s.attributes || {}, id = String(a.media_content_id || "");
+  if (a.media_content_type !== "music") return false;
+  if (/podcast|audiobook/i.test(id)) return false;
+  if (/^https?:\/\/.*\.(mp3|m4a|aac|ogg)(\?|$)/i.test(id)) return false;
+  return true;
+}
+function loadMusic() {
+  if (MFORCE) { var mt = (Q.match(/[?&]mtitle=([^&]+)/) || [])[1], ma = (Q.match(/[?&]martist=([^&]+)/) || [])[1];   // ?mtitle= / ?martist= with ?music=on
+    MUSIC.on = MFORCE === "on"; MUSIC.title = MUSIC.on ? (mt ? decodeURIComponent(mt.replace(/\+/g, " ")) : "Hit Me Like a Drum") : null;
+    MUSIC.artist = MUSIC.on ? (ma ? decodeURIComponent(ma.replace(/\+/g, " ")) : mt ? null : "Parov Stelar feat. Timothy Auld") : null; return; }
+  if (DEMO || !MUSIC_ID) return;
+  hassToken().then(function (tok) { return getState(MUSIC_ID, tok); }).then(function (s) {
+    MUSIC.on = isMusic(s); MUSIC.title = MUSIC.on ? s.attributes.media_title || null : null; MUSIC.artist = MUSIC.on ? s.attributes.media_artist || null : null;
+    MUSIC.at = new Date(); MUSIC.err = null;
+  }).catch(function (e) { console.warn("meadow: music poll failed", e); MUSIC.on = false; MUSIC.err = e.message || String(e); });
+}
+// The quick poll: the printer's six sensors, the letter helper and the rain sensor, every 45s.
+function loadLive() {
+  if (DEMO) { PR = demoPrinter();
+    if (LFORCE) letterArrived(decodeURIComponent(LFORCE.replace(/\+/g, " ")), "hook"); return; }
+  hassToken().then(function (tok) {
+    function opt(id) { if (!id) return Promise.resolve(null); return getState(id, tok).catch(function (e) { console.warn("meadow: " + id, e); return null; }); }
+    return Promise.all(PR_KEYS.map(function (k) { return opt(PR_ID && PR_ID + k); }).concat([opt(SENSORS.letter), opt(SENSORS.rain)]));
+  }).then(function (s) {
+    setPrinter(s);
+    var l = s[6], txt = l && l.state, r = s[7] && s[7].state;
+    if (txt && !/^(unknown|unavailable)$/.test(txt) && txt.trim()) letterArrived(txt, txt + "|" + l.last_changed);
+    RAIN = RAIN_STATES.wet.indexOf(r) >= 0 ? "raining" : RAIN_STATES.dry.indexOf(r) >= 0 ? "none" : null;
+    if (r && !RAIN && !/^(unknown|unavailable)$/.test(r)) console.warn("meadow: rain sensor said " + r + ", ignoring it");
+  }).catch(function (e) { console.warn("meadow: live poll failed", e); PR.at = null; PR.err = e.message || String(e); RAIN = null; });
+}
+
+// ── Tap shortcuts ───────────────────────────────────────────────────────────
+// A building opens its own dashboard view (VIEW, in CONFIG), so the kids skip the up/down
+// keys: workshop -> printer, bandstand -> music, cottage -> home, robot -> office.
+// Same mechanism as go() in crestron-keys.js: pushState on the dashboard page and a
+// popstate, which Home Assistant's router follows without reloading anything. It
+// works because this page is same-origin with the dashboard (the keys already go
+// up the same way). A null path leaves the building as scenery.
+var NAVS = [];                                     // what a tap asked for, for ?dbg checks
+function goView(path) {
+  if (!path) return false;
+  NAVS.push({ path: path, at: Date.now() });
+  if (window.parent === window) { console.warn("meadow: not inside the dashboard, would open " + path); return false; }
+  try {
+    var P = window.parent;
+    if (P.location.pathname === path) return true;
+    P.history.pushState(null, "", path);
+    P.dispatchEvent(new P.PopStateEvent("popstate"));
+    return true;
+  } catch (e) { console.warn("meadow: could not open " + path, e); say("oops", W / 2, H / 2); return false; }
+}
+
+// ── The office robot ────────────────────────────────────────────────────────
+// Optional, off unless OFFICE_URL is set. A little robot wanders the meadow saying
+// an agent office's latest line. OFFICE_URL must answer GET with JSON shaped
+// { <source>: { data: { title|project, stations: [{ id, state, detail, attention }] } } }
+// and allow this page's origin (CORS). Ours is a small status server fed by a
+// Claude Code mod; docs/06-views.md has the outline.
+//   someone waiting on you (attention "ask")      -> "<session> / needs you", red rim
+//   otherwise the newest still-true line:          -> "<session> / <detail>" (a working station's current
+//     call) or "<session> / all done" (a turn that just ended), newest first
+//   nobody working for 45 s                       -> no bubble, eyes on
+//   server unreachable (its computer asleep)      -> robot stands still, screen dark, grey "office offline"
+// Never a made-up line: no bubble unless the server said it in the last 45 s.
+var OFFICE = { ok: null, line: null, err: null, at: null }, OSEEN = {}, ODONE = {};   // OSEEN/ODONE: station -> the line it said and when it first said it
+var ROBOT = null, ROBO_ON = null, ROBO_OFF = null, ROBO_BUB = null, ROBO_KEY = "";
+var HOLD_MS = 45000, ROBO_SC = 1.2;                // about the family's height
+function officeName(d) { var n = String(d.title || d.project || "agent").trim() || "agent"; return n.length > 22 ? n.slice(0, 21) + "…" : n; }
+function officeLine(all, nowMs) {
+  var tnow = nowMs || Date.now(), seen = {}, ask = null, best = null, src, d, i, st, key, nm, c;
+  for (src in all) { d = all[src] && all[src].data; if (!d || !Array.isArray(d.stations)) continue; nm = officeName(d);
+    for (i = 0; i < d.stations.length; i++) { st = d.stations[i] || {}; key = src + "/" + st.id;
+      if (st.attention === "ask" && !ask) ask = { name: nm, text: "needs you", kind: "ask", key: key, at: tnow };
+      if (st.attention === "done") { seen["d" + key] = 1; c = ODONE[key] || (ODONE[key] = { name: nm, text: "all done", kind: "done", key: key, at: tnow }); if (!best || c.at > best.at) best = c; }
+      if (st.state === "working" && st.detail) { seen["w" + key] = 1;
+        c = OSEEN[key]; if (!c || c.text !== String(st.detail)) c = OSEEN[key] = { name: nm, text: String(st.detail), kind: "work", key: key, at: tnow };
+        if (!best || c.at > best.at) best = c; } } }
+  for (key in OSEEN) if (!seen["w" + key]) delete OSEEN[key];
+  for (key in ODONE) if (!seen["d" + key]) delete ODONE[key];
+  var cur = OFFICE.line;
+  if (ask) OFFICE.line = ask;
+  else if (best) { best.last = tnow; OFFICE.line = best; }       // the newest thing anyone said that is still true
+  else if (!cur || cur.kind === "ask" || tnow - cur.last > HOLD_MS) OFFICE.line = null;
+  return OFFICE.line;
+}
+function loadOffice() {
+  if (OFORCE) { var f = decodeURIComponent(OFORCE.replace(/\+/g, " ")), m = f.match(/^([^:]+):(.+)$/);
+    OFFICE.ok = f !== "off"; OFFICE.err = f === "off" ? "forced" : null;
+    OFFICE.line = f === "off" || f === "quiet" || !m ? null : m[1] === "ask" ? { name: m[2], text: "needs you", kind: "ask", key: "hook", at: Date.now() } : { name: m[1], text: m[2], kind: "work", key: "hook", at: Date.now() };
+    return; }
+  if (DEMO || !OFFICE_URL) return;
+  var ac = window.AbortController ? new AbortController() : null, tm = ac ? setTimeout(function () { ac.abort(); }, 6000) : 0;
+  fetch(OFFICE_URL, { cache: "no-store", signal: ac ? ac.signal : undefined })
+    .then(function (r) { if (!r.ok) throw new Error("office returned " + r.status); return r.json(); })
+    .then(function (all) { OFFICE.ok = true; OFFICE.err = null; OFFICE.at = new Date(); var was = OFFICE.line, ln = officeLine(all);
+      if (ln && (!was || ln.key !== was.key || ln.text !== was.text) && ROBOT) { ROBOT.hop = 0.5; ROBOT.flash = 1.2; } })
+    .catch(function (e) { if (OFFICE.ok !== false) console.warn("meadow: office poll failed", e); OFFICE.ok = false; OFFICE.err = e.message || String(e); OFFICE.line = null; })
+    .then(function () { clearTimeout(tm); });
+}
+// Body and head baked once (screen lit and dark); legs and the antenna light live.
+function bakeRobot(lit) {
+  var w = 60, h = 80, c = canvas(w * K, h * K), g = c.getContext("2d"), cx = w / 2, ft = h - 2;
+  g.scale(K, K); g.lineJoin = "round";
+  g.fillStyle = "#BDB6AA"; rr(g, cx - 22, ft - 31, 7, 15, 3.5); g.fill(); rr(g, cx + 15, ft - 31, 7, 15, 3.5); g.fill();   // arms
+  g.fillStyle = "#EDE8DE"; g.strokeStyle = "#8A8378"; g.lineWidth = 2;
+  rr(g, cx - 16, ft - 35, 32, 26, 8); g.fill(); g.stroke();                                                            // body
+  g.fillStyle = "#D97757"; rr(g, cx - 7, ft - 29, 14, 9, 3); g.fill();                                                 // Claude-orange chest plate
+  g.fillStyle = "#8A8378"; g.fillRect(cx - 4, ft - 40, 8, 6);                                                          // neck
+  g.fillStyle = "#EDE8DE"; rr(g, cx - 19, ft - 66, 38, 28, 10); g.fill(); g.stroke();                                  // head
+  g.fillStyle = lit ? "#2B2433" : "#5E5966"; rr(g, cx - 14, ft - 61, 28, 18, 6); g.fill();                             // screen
+  if (lit) { g.fillStyle = "#7FE3D0"; rr(g, cx - 9, ft - 57, 5, 7, 2.5); g.fill(); rr(g, cx + 4, ft - 57, 5, 7, 2.5); g.fill();
+    g.strokeStyle = "#7FE3D0"; g.lineWidth = 1.8; g.beginPath(); g.arc(cx, ft - 50, 4, 0.25 * Math.PI, 0.75 * Math.PI); g.stroke(); }
+  else { g.strokeStyle = "#9A96A0"; g.lineWidth = 2; g.beginPath(); g.moveTo(cx - 9, ft - 53); g.lineTo(cx - 4, ft - 53); g.moveTo(cx + 4, ft - 53); g.lineTo(cx + 9, ft - 53); g.stroke(); }
+  g.strokeStyle = "#8A8378"; g.lineWidth = 2; g.beginPath(); g.moveTo(cx, ft - 66); g.lineTo(cx, ft - 74); g.stroke();  // antenna stalk
+  return { c: c, ax: cx * K, ay: ft * K, k: K };
+}
+function clipWords(g, text, max) {
+  if (g.measureText(text).width <= max) return text;
+  while (text.length > 1 && g.measureText(text + "…").width > max) text = text.slice(0, -1);
+  var sp = text.lastIndexOf(" "); if (sp > text.length * 0.6) text = text.slice(0, sp);
+  return text.replace(/[\s,.;:-]+$/, "") + "…";
+}
+function bakeRobotBubble(line, offline) {
+  var fn = "600 " + 13 * K + "px Fredoka", ft = "500 " + 16 * K + "px Fredoka", max = 250 * K, pad = 12 * K;
+  var g0 = canvas(10, 10).getContext("2d"), name = offline ? null : line.name, text = offline ? "office offline" : line.text, nw = 0;
+  g0.font = ft; text = clipWords(g0, text, max); var tw = g0.measureText(text).width;
+  if (name) { g0.font = fn; name = clipWords(g0, name, max); nw = g0.measureText(name).width; }
+  var w = Math.max(tw, nw) + pad * 2, h = (name ? 46 : 28) * K, c = canvas(w + 4 * K, h + 4 * K), g = c.getContext("2d"), x = 2 * K, y = 2 * K;
+  var rim = offline ? "#A9A4AF" : line.kind === "ask" ? "#C4553A" : "#D97757";
+  g.fillStyle = offline ? "rgba(240,238,244,.92)" : "rgba(255,255,255,.96)"; g.strokeStyle = rim; g.lineWidth = 2.5 * K;
+  rr(g, x, y, w, h, 12 * K); g.fill(); g.stroke();
+  g.textAlign = "left"; g.textBaseline = "middle";
+  if (name) { g.fillStyle = line.kind === "ask" ? "#C4553A" : "#B5583A"; g.font = fn; g.fillText(name, x + pad, y + 14 * K); }
+  g.fillStyle = offline ? "#6E6A75" : "#26352C"; g.font = ft; g.fillText(text, x + pad, name ? y + 32 * K : y + h / 2 + K);
+  return { c: c, w: c.width / K, h: c.height / K, rim: rim, fill: offline ? "rgba(240,238,244,.92)" : "rgba(255,255,255,.96)" };
+}
+function updateRobot(dt) {
+  if (!LAY.R || !(OFFICE_URL || OFORCE)) return;              // no office configured: no robot at all
+  if (!ROBOT) { var p0 = spot(false); ROBOT = { x: p0.x, y: p0.y, tx: p0.x, ty: p0.y, wait: rand(1, 4), face: 1, phase: 0, gait: 0, hop: 0, flash: 0, bubBox: null }; }
+  var R = ROBOT, off = OFFICE.ok === false;
+  R.hop = Math.max(0, R.hop - dt); R.flash = Math.max(0, R.flash - dt);
+  if (off) { R.gait = Math.max(0, R.gait - dt * 3); return; }      // powered down where it stood
+  var dx = R.tx - R.x, dy = R.ty - R.y, d = Math.sqrt(dx * dx + dy * dy);
+  if (d < 3) { R.gait = Math.max(0, R.gait - dt * 3); R.wait -= dt;
+    if (R.wait <= 0) { var p = spot(false); R.tx = p.x; R.ty = p.y; R.wait = rand(4, 10); } return; }
+  var v = 30 * depth(R.y), stp = Math.min(d, v * dt);
+  R.x += dx / d * stp; R.y += dy / d * stp; R.face = dx >= 0 ? 1 : -1;
+  R.gait = Math.min(1, R.gait + dt * 3); R.phase += dt * 9;
+}
+function drawRobot(time) {
+  var R = ROBOT; if (!R) return;
+  if (!ROBO_ON) { ROBO_ON = bakeRobot(true); ROBO_OFF = bakeRobot(false); }
+  var off = OFFICE.ok === false, sc = depth(R.y) * ROBO_SC;
+  var hop = (R.hop > 0 ? Math.sin((1 - R.hop / 0.5) * Math.PI) * 14 : Math.abs(Math.sin(R.phase)) * 2.5 * R.gait) * sc;
+  var bob = off ? 0 : Math.sin(time * 2.2) * 0.8;
+  var sw = 40 * sc * (1 - Math.min(0.4, hop / 40));
+  ctx.drawImage(SHADOW, R.x - sw / 2, R.y - sw * 0.14, sw, sw * 0.28);
+  ctx.fillStyle = "#6E6860";                                         // legs, stepping while it walks
+  var l1 = Math.max(0, Math.sin(R.phase)) * 4 * R.gait, l2 = Math.max(0, -Math.sin(R.phase)) * 4 * R.gait;
+  ctx.fillRect(R.x - 9 * sc, R.y - hop - (10 + l1) * sc, 6 * sc, (10 - l1 * 0.3) * sc);
+  ctx.fillRect(R.x + 3 * sc, R.y - hop - (10 + l2) * sc, 6 * sc, (10 - l2 * 0.3) * sc);
+  blit(off ? ROBO_OFF : ROBO_ON, R.x, R.y - hop - 7 * sc + bob, R.face, 1, 1, sc, off ? 0 : 0.04 * R.face * R.gait);
+  var ax = R.x, ay = R.y - hop - 7 * sc + bob - 76 * sc, on = !off && (R.flash > 0 ? Math.sin(time * 18) > 0 : Math.sin(time * 3) > -0.3);
+  if (on && DARK > 0.05) { ctx.globalAlpha = Math.min(1, DARK + 0.3); ctx.drawImage(GLOW, ax - 9, ay - 9, 18, 18); ctx.globalAlpha = 1; }
+  ctx.fillStyle = off ? "#8C8794" : on ? (OFFICE.line && OFFICE.line.kind === "ask" ? "#FF6B6B" : "#FFB35C") : "#B5583A";
+  ctx.beginPath(); ctx.arc(ax, ay, 3.6 * sc, 0, 7); ctx.fill();
+}
+function drawRobotBubble(time) {
+  var R = ROBOT; if (!R) return;
+  var off = OFFICE.ok === false, line = OFFICE.line;
+  if (!off && !line) { R.bubBox = null; return; }
+  var key = off ? "off" : line.kind + "|" + line.name + "|" + line.text;
+  if (key !== ROBO_KEY) { ROBO_KEY = key; ROBO_BUB = bakeRobotBubble(line, off); }
+  var b = ROBO_BUB, sc = depth(R.y) * ROBO_SC, head = R.y - 92 * sc + (off ? 0 : Math.sin(time * 1.6) * 1.5);
+  var bx = clamp(R.x - b.w / 2, 8, W - b.w - 8), by = head - b.h - 6;
+  var tx = clamp(R.x, bx + 16, bx + b.w - 16);                      // the tail stays on the robot when the bubble hits an edge
+  ctx.fillStyle = b.fill; ctx.strokeStyle = b.rim; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.moveTo(tx - 7, by + b.h - 4); ctx.lineTo(tx, by + b.h + 6); ctx.lineTo(tx + 7, by + b.h - 4); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.drawImage(b.c, bx, by, b.w, b.h);
+  R.bubBox = [bx, by, b.w, b.h + 10];
+}
+function robotHit(x, y) {
+  var R = ROBOT; if (!R) return false;
+  var sc = depth(R.y) * ROBO_SC;                                                       // generous: a wall panel, small fingers
+  if (x > R.x - 46 && x < R.x + 46 && y > R.y - 100 * sc && y < R.y + 16) return true;
+  var b = R.bubBox;
+  return !!(b && x >= b[0] - 10 && x <= b[0] + b[2] + 10 && y >= b[1] - 10 && y <= b[1] + b[3] + 10);
+}
 
 // ── HUD ─────────────────────────────────────────────────────────────────────
 var $ = function (id) { return document.getElementById(id); };
 function hud() {
   var d = now();
-  PARTY = findParty();
+  CD = countdowns(); PARTY = findParty(); HOUSE = findHouseParty(); renderDates();
   $("clock").innerHTML = pad2(d.getHours()) + ":" + pad2(d.getMinutes()) +
     (WX.live && WX.temp != null ? '<span class="temp">' + Math.round(WX.temp) + "\u00b0</span>" : "");
   $("date").textContent = DAYS_LONG[d.getDay()] + " " + d.getDate() + " " + MONTHS_LONG[d.getMonth()];
@@ -2633,6 +3556,7 @@ function hud() {
   else if (DATA.weekAt && d - DATA.weekAt > 40 * 60000) st = "Calendars last checked " + dayLabel(ymd(DATA.weekAt)).toLowerCase() + " " + pad2(DATA.weekAt.getHours()) + ":" + pad2(DATA.weekAt.getMinutes());
   else if (!DATA.gotAt && !DEMO) st = "Loading the week";
   else if (!WX.live && !DEMO) st = "Weather unavailable, showing made-up showers";
+  else if (LETTER.clearErr) st = "Couldn't clear the letter in Home Assistant";
   $("status").textContent = st;
   $("next").style.opacity = FLIGHT ? 0 : 1;
   document.body.classList.toggle("night", DARK > 0.5);
@@ -2648,6 +3572,10 @@ function openCard(t) {
   var p = t.person, name = p.name, td = ymd(now()), html = "";
   var mine = DATA.events.filter(function (e) { return e.who === name; });
   var today = mine.filter(function (e) { return e.day === td; }), later = mine.filter(function (e) { return e.day > td; });
+  if (t.letter) {                                                          // the postie's letter, read once
+    var lt = t.letter; t.letter = null; clearLetter(lt);
+    html += "<h2>A letter</h2>" + row(pad2(lt.at.getHours()) + ":" + pad2(lt.at.getMinutes()), lt.text, "Post");
+  }
   html += "<h2>Today</h2>";
   html += today.length ? today.map(function (e) { return row(e.all_day ? "All day" : e.at, e.what); }).join("")
     : '<div class="empty">' + (name === "House" ? "Nothing for the house today." : "Nothing on today. Plenty of time for snacks.") + "</div>";
@@ -2684,6 +3612,7 @@ function openCard(t) {
     return name === "House" || SOURCE_OWNER.some(function (m) { return m[0].test(s) && m[1] === name; }); });
   if (missing.length) foot.push('<span class="bad">Couldn\'t check: ' + missing.map(esc).join(", ") + ".</span>");
   if (!DATA.extra && !DEMO) foot.push('<span class="bad">No school info loaded.</span>');
+  if (LETTER.clearErr) foot.push('<span class="bad">Couldn\'t clear the letter in Home Assistant (' + esc(LETTER.clearErr) + ').</span>');
   html += '<div class="foot">' + foot.join(" ") + "</div>";
 
   $("lists").innerHTML = html; $("lists").scrollTop = 0;
@@ -2795,6 +3724,46 @@ function openSchool() {
   $("scrim").classList.add("open");
   clearTimeout(closeTimer); closeTimer = setTimeout(closeCard, 60000);
 }
+// ── The workshop card ───────────────────────────────────────────────────────
+// The print job as the printer reports it: name, percent, time left and when
+// that lands on the clock. Nothing fresh, and the card says so instead of
+// showing the last thing it saw.
+var SHOP_CARD = { happy: 0, wait: 0 };
+var PR_LABEL = { running: "Printing", pause: "Paused", finish: "Finished", failed: "Failed", idle: "Idle", prepare: "Getting ready",
+  slicing: "Slicing", init: "Starting up", offline: "Offline", unknown: "Unknown", missing: "Not reachable" };
+function mins(m) { return m >= 60 ? Math.floor(m / 60) + "h " + pad2(m % 60) + "m" : m + " min"; }
+function openShop() {
+  var ps = printerState(), live = ps !== "empty", st = live ? PR.status : (PR.err ? "missing" : PR.status), html = "", sum;
+  var label = PR_LABEL[st] || st;
+  html += "<h2>The printer</h2>" + row("Status", label);
+  if (live && PR.name && st !== "idle") html += row("Job", PR.name);
+  if (st === "running" || st === "pause") {
+    html += row("Progress", Math.round(PR.progress) + "%");
+    if (PR.layer != null && PR.layers != null) html += row("Layer", PR.layer + " of " + PR.layers);
+    if (PR.remain != null) { var done = new Date(now().getTime() + PR.remain * 60000);
+      html += row("Time left", mins(PR.remain)) + row("Done at", pad2(done.getHours()) + ":" + pad2(done.getMinutes()) + (st === "pause" ? " once it resumes" : "")); }
+    sum = label + ", " + Math.round(PR.progress) + "%";
+  } else if (st === "finish") { html += row("Progress", "100%"); sum = "Finished" + (PR.name ? ": " + PR.name : ""); }
+  else if (st === "failed") sum = "The print failed";
+  else if (/^(prepare|slicing|init)$/.test(st)) sum = "A print is starting";
+  else if (st === "idle") sum = "Nothing printing";
+  else sum = live ? label : "Printer not reachable";
+  var foot = [];
+  if (PR.at) foot.push("Printer checked " + pad2(PR.at.getHours()) + ":" + pad2(PR.at.getMinutes()) + ".");
+  if (!live) foot.push('<span class="bad">' + (PR.err ? "Can't reach the printer sensors (" + esc(PR.err) + ")." : "No fresh reading from the printer.") + "</span>");
+  html += '<div class="foot">' + foot.join(" ") + "</div>";
+  $("lists").innerHTML = html; $("lists").scrollTop = 0;
+  $("who").textContent = "Workshop"; $("sum").textContent = sum;
+  $("face").style.background = "#DCE6F0";
+  // portrait: the finished workshop, from its baked pieces
+  var pc = $("portrait"), g = pc.getContext("2d"), k = pc.width / 130;
+  g.clearRect(0, 0, pc.width, pc.height); g.save(); g.scale(k, k); g.translate(65, 118);
+  [[SHOP.walls2, 0, 0], [SHOP.roof, 0, -48], [SHOP.sign, -56, 0]].forEach(function (p) { var ic = p[0]; g.drawImage(ic.c, p[1] - ic.ax / ic.k, p[2] - ic.ay / ic.k, ic.c.width / ic.k, ic.c.height / ic.k); });
+  g.restore();
+  openThing = SHOP_CARD;
+  $("scrim").classList.add("open");
+  clearTimeout(closeTimer); closeTimer = setTimeout(closeCard, 60000);
+}
 
 // ── The banner plane ────────────────────────────────────────────────────────
 // Every few minutes, and whenever the next event changes, a little plane tows the
@@ -2887,10 +3856,25 @@ cv.addEventListener("pointerdown", function (e) {
     if (d < t.r * sc * 1.8 && d < bd) { bd = d; best = t; } }
   if (best) { best.jump = 0.6; best.happy = 1; puff("heart", best.x, best.y - best.r * 2.2, 3, best.person.col);
     setTimeout(function () { openCard(best); }, 320); return; }
+  // The office robot, or its speech bubble: the agent office view
+  if (robotHit(x, y)) { ROBOT.hop = 0.5; ROBOT.flash = 1; say("beep!", ROBOT.x, ROBOT.y - 90);
+    setTimeout(function () { goView(VIEW.office); }, 380); return; }
   // The school: its tag, or the building itself
   var s0 = LAY.school, tb = SCHOOL_CARD.tagBox;
   if ((x > s0.x - 90 && x < s0.x + 90 && y > s0.y - 145 && y < s0.y + 8) || (tb && x >= tb[0] - 10 && x <= tb[0] + tb[2] + 10 && y >= tb[1] - 10 && y <= tb[1] + tb[3] + 10)) {
     say("ding!", s0.x + 22, s0.y - 150); setTimeout(openSchool, 320); return; }
+  // The workshop: the plot, its board and the builder
+  var sh = LAY.shop;
+  if (VIEW.printer && x > sh.x - 90 && x < sh.x + 66 && y > sh.y - 100 && y < sh.y + 12) {
+    puff("chip", sh.x, sh.y - 30, 6, "#D9B27A"); setTimeout(function () { goView(VIEW.printer); }, 380); return; }
+  // The bandstand, the band on it and the now-playing sign over it: the music view
+  var bs = LAY.band, top0 = bs.y - 140 - (SIGN && MUSIC_T > 0.3 ? SIGN.h + 14 : 0);
+  if (VIEW.music && x > bs.x - 95 && x < bs.x + 95 && y > top0 && y < bs.y + 22) {
+    puff("note", bs.x + rand(-30, 30), bs.y - 100, 5, "#D9534F"); setTimeout(function () { goView(VIEW.music); }, 380); return; }
+  // The blue cottage, the family's house: the Home view (the room the panel lives in)
+  var ct = LAY.cottage;
+  if (VIEW.home && x > ct.x - 58 && x < ct.x + 58 && y > ct.y - 110 && y < ct.y + 10) {
+    puff("heart", ct.x + 18, ct.y - 50, 3, "#FF7FA0"); setTimeout(function () { goView(VIEW.home); }, 380); return; }
   // Everyone else just enjoys the attention.
   for (i = 0; i < things.length; i++) { t = things[i];
     if (t.kind !== "fam" && Math.abs(x - t.x) < t.r * 1.8 && Math.abs(y - (t.y - t.r)) < t.r * 1.8) {
@@ -2921,22 +3905,34 @@ function size() {
   HZ = Math.round(H * 0.27); TOP = HZ + 44;
   bakeBackground();
 }
-var last = 0, lastHud = 0, clock0 = performance.now();
+var last = 0, lastHud = 0, clock0 = performance.now(), FPSN = 0, FPSMS = 0, FPS0 = 0, FPST = "";
 function frame(ms) {
   requestAnimationFrame(frame);
   if (ms - last < 31) return;                           // 30 fps is plenty for a wall, and kinder to it
   var dt = Math.max(0, Math.min(0.1, (ms - last) / 1000)); last = ms;
   nightness = sleepCurve(now(), PARTY ? 21.5 : 20.5); DARK = darkness(now());
+  var t0 = FPS ? performance.now() : 0;
   update(dt); draw((ms - clock0) / 1000);
+  if (FPS) { FPSN++; FPSMS += performance.now() - t0; if (ms - FPS0 >= 2000) { FPST = (FPSN * 1000 / (ms - FPS0)).toFixed(1) + " fps \u00b7 " + (FPSMS / FPSN).toFixed(1) + " ms"; FPSN = 0; FPSMS = 0; FPS0 = ms; }
+    ctx.font = "600 16px Fredoka"; ctx.textAlign = "right"; ctx.textBaseline = "bottom"; ctx.fillStyle = "#000"; ctx.fillRect(W - 170, H - 26, 170, 26); ctx.fillStyle = "#FFF"; ctx.fillText(FPST, W - 8, H - 4); }
   if (ms - lastHud > 1000) { lastHud = ms; hud(); }
 }
 function start() {
   // Tags go up before any data: if Home Assistant is down at boot, everyone still has a name.
   size(); setup(); refreshTags(); load(); nightness = sleepCurve(now(), 20.5); DARK = darkness(now()); hud();
+  loadMusic();                                                                   // before the warm-up, so ?music=on is seen by it
+  if (WARM) { nightness = sleepCurve(now(), PARTY ? 21.5 : 20.5); for (var wi = 0; wi < Math.min(WARM, 120) * 30; wi++) update(1 / 30); }
   setInterval(load, 5 * 60000);
+  setTimeout(loadLive, DEMO ? 2500 : 1500); setInterval(loadLive, 45000);      // the printer and the letters
+  setInterval(loadMusic, 10000);                                                 // the speaker, for the dancing
+  setTimeout(loadOffice, DEMO ? 2000 : 1200); setInterval(loadOffice, 10000);    // the agent office, for the robot
   requestAnimationFrame(frame);
   window.addEventListener("resize", function () { size(); VILLAGE = makeVillage(); makeWeatherSprites(); });   // positions are screen fractions
+  // ?dbg exposes the sim for a headless check (positions, duties, the printer, the letters).
+  if (/[?&]dbg\b/.test(Q)) window.meadow = { fam: fam, LETTER: LETTER, pr: function () { return PR; }, music: function () { return { m: MUSIC, t: MUSIC_T, dance: DANCE, sign: SIGN && { w: SIGN.w, h: SIGN.h } }; }, fps: function () { return FPST; }, isMusic: isMusic, state: printerState, open: openCard, shop: openShop,
+    office: function () { return { o: OFFICE, robot: ROBOT && { x: ROBOT.x, y: ROBOT.y, bub: ROBOT.bubBox } }; }, officeLine: officeLine, nav: function () { return NAVS; }, go: goView };
   if (OPEN === "school") setTimeout(openSchool, 900);
+  else if (OPEN === "workshop") setTimeout(openShop, 900);
   else if (OPEN) setTimeout(function () { var t = fam.filter(function (f) { return f.person.name.toLowerCase() === OPEN.toLowerCase(); })[0]; if (t) openCard(t); }, 900);
 }
 (document.fonts && document.fonts.load ? document.fonts.load("600 20px Fredoka").catch(function (e) { console.warn("font", e); }) : Promise.resolve()).then(start);

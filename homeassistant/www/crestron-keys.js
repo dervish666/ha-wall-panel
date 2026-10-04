@@ -18,11 +18,14 @@
   "use strict";
 
   // Panning order. The Meadow is first because it is the landing page; Today
-  // sits next to it. Add a view to dashboards/wall-panel.yaml and its path here.
+  // sits next to it. Music sits next to Home, which carries the TV it expands
+  // on. Add a view to dashboards/wall-panel.yaml and its path here; delete a
+  // view and take its path out.
   var VIEWS = [
     "/wall-panel/meadow",
     "/wall-panel/today",
     "/wall-panel/home",
+    "/wall-panel/music",
     "/wall-panel/lights",
     "/wall-panel/printer"
   ];
@@ -161,4 +164,19 @@
   document.addEventListener("keydown", handle, true);
   document.addEventListener("keyup", swallow, true);
   document.addEventListener("keypress", swallow, true);
+
+  // A view that iframes a page from ANOTHER origin (another server on your
+  // network) cannot dispatch on this document the way meadow.html does. The
+  // page posts its side keys and taps here instead, and only EMBED_ORIGIN is
+  // listened to. null, the default, turns the relay off. Set it to the exact
+  // origin, scheme and port included, e.g. "http://192.168.1.50:8137".
+  // docs/06-views.md, "A page from another server", has the page's half.
+  var EMBED_ORIGIN = null;
+  if (EMBED_ORIGIN) window.addEventListener("message", function (e) {
+    var d = e.data;
+    if (e.origin !== EMBED_ORIGIN || !d || typeof d !== "object") return;
+    if (d.type === "crestron-activity") document.dispatchEvent(new Event("crestron-activity"));
+    else if (d.type === "crestron-key" && /^key(down|up|press)$/.test(d.event))
+      document.dispatchEvent(new KeyboardEvent(d.event, { key: String(d.key), code: String(d.code), bubbles: true, cancelable: true }));
+  });
 })();

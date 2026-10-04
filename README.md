@@ -9,11 +9,18 @@ works on an ordinary wall tablet. The Crestron parts are clearly marked and you 
 What you get:
 
 - **Meadow**, the landing view. The family live in a small animated village as creatures.
-  Tap one to see that person's week, pulled from your Home Assistant calendars.
-- **Today**, a four-column family agenda with a person page behind each name.
-- **Home**, the room the panel lives in. Lights, the TV, temperatures, energy.
+  Tap one to see that person's week, pulled from your Home Assistant calendars. The kids
+  walk to school, the workshop builds whatever the printer is printing, a postie delivers
+  notes typed on a phone, and everyone dances when music plays.
+- **Home**, the room the panel lives in. Lights, the TV, temperatures, energy, bin day.
+- **Music**, Music Assistant on the wall: now playing, a speaker picker, playlist tiles.
 - **Lights**, every light with a real brightness slider.
 - **Printer**, a 3D printer status page (Bambu Lab A1 Mini here, easy to drop).
+- **Today**, optional. A four-column family agenda with a person page behind each name. We
+  retired it once the Meadow could do its job, but it still works and stays in the repo.
+- **Office**, an optional example of a view that iframes a page from another server. Ours
+  is private and not shipped; [06](docs/06-views.md#a-page-from-another-server) shows the
+  pattern.
 - A frosted glass theme over a generated wallpaper, with no scrolling anywhere at 1280x800.
 
 On the TSW-1060 it also does the things a bare panel will not do by itself. It boots
@@ -36,13 +43,15 @@ written for a stranger starting from zero.
 - **Optional, for the Printer view only:** the [Bambu Lab
   integration](https://github.com/greghesp/ha-bambulab) from HACS. Delete the view if you have
   no printer.
+- **Optional, for the Music view only:** [Music Assistant](https://www.music-assistant.io/)
+  and its Home Assistant integration. Delete the view if you do not run it.
 - **Core integrations** the views read from: Google Calendar (or any calendar integration)
   for Today and Meadow, and a `weather` entity (the default Met.no one is fine).
 - **For the Crestron path only:** SSH access to the panel and Node.js on a computer, to build
   the launcher project once.
 
 No other custom cards. Everything else is a core card: `markdown`, `clock`, `entity`,
-`weather-forecast`, `picture-entity`, `iframe`, `grid`.
+`weather-forecast`, `picture-entity`, `iframe`, `media-control`, `grid`.
 
 ## Quick start
 
@@ -71,7 +80,7 @@ No other custom cards. Everything else is a core card: `markdown`, `clock`, `ent
 | [04 Hard keys and backlight](docs/04-hard-keys-and-backlight.md) | Side keys, idle return, replacing standby |
 | [05 Theme and glass](docs/05-theme-and-glass.md) | The glass look without blur, wallpaper, column and row maths |
 | [06 Views](docs/06-views.md) | Each view, what to swap, adding people and views, the Meadow config |
-| [07 Traps](docs/07-traps.md) | Nineteen things that cost us time, so they need not cost you any |
+| [07 Traps](docs/07-traps.md) | Twenty-four things that cost us time, so they need not cost you any |
 
 ## Layout
 

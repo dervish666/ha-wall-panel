@@ -1,14 +1,19 @@
 # The wall panel's share of configuration.yaml. This is NOT a whole file:
 # merge each block into your own configuration.yaml by hand. If you already
-# have a homeassistant:, frontend:, lovelace:, shell_command:, template: or
-# command_line: key, add these entries under it rather than pasting a second
-# copy of the key (YAML keeps only the last one, silently).
+# have a homeassistant:, frontend:, lovelace:, media_player:, shell_command:,
+# template:, command_line:, sensor:, input_select: or input_text: key, add
+# these entries under it rather than pasting a second copy of the key (YAML
+# keeps only the last one, silently).
 #
 # Placeholders to replace:
 #   192.168.1.50          the panel's IP address (give it a DHCP reservation)
 #   <panel user id>       the id of the HA user the panel signs in as
 #   HOME_ASSISTANT_IP     your Home Assistant's LAN address
 #   calendar.*            your own calendars, and the names they map to
+#   media_player.kitchen_speaker, media_player.living_room_tv_music
+#                         your two Music Assistant players (Music view only)
+#   PODCAST_FEED_URL      the RSS feed for the "latest episode" tile (optional)
+#   /config/scripts/bin-collections.py   your own bin day script (optional)
 
 homeassistant:
   auth_providers:
@@ -47,6 +52,47 @@ lovelace:
       icon: mdi:tablet-dashboard
       show_in_sidebar: true
       require_admin: false
+
+# ── Music view (optional, needs Music Assistant) ───────────────────────────
+# The Music view drives ONE entity. A Lovelace card cannot template its
+# entity, so this universal player follows input_select.music_target (below)
+# and the core media-control card and Mushroom's media cards work on it
+# unchanged. The Meadow reads it too, to know when to dance. Its
+# entity_picture is HA's own media_player_proxy, so album art reaches the
+# panel same-origin instead of from the Music Assistant add-on's port.
+# Music Assistant's own services (play_media, transfer_queue) will not accept
+# this entity: script.music_play and script.music_bring_here in
+# scripts.example.yaml pick the real player from the same input_select.
+media_player:
+  - platform: universal
+    name: Music
+    unique_id: wall_panel_music
+    device_class: speaker
+    children:
+      - media_player.kitchen_speaker
+      - media_player.living_room_tv_music
+    active_child_template: >-
+      {{ 'media_player.living_room_tv_music' if is_state('input_select.music_target', 'TV') else 'media_player.kitchen_speaker' }}
+
+# Which player the Music view and its tiles drive. The option names are what
+# the view and the scripts test for, so keep them or change all three files.
+# Creating it in the UI (Settings > Devices > Helpers) works just as well.
+input_select:
+  music_target:
+    name: Music target
+    icon: mdi:speaker
+    options:
+      - Speaker
+      - TV
+
+# The Meadow's postie. Type "Ivy: tea's at six" here (or run
+# script.meadow_send_letter) and the postie carries it to Ivy. The Meadow
+# clears it once the letter is read. A UI helper works just as well.
+input_text:
+  meadow_letter:
+    name: Meadow letter
+    icon: mdi:email-outline
+    max: 255
 
 # The panel's user project (crestron/launcher) fires the crestron-open-browser
 # webhook on every boot; the automation answers by opening the panel's real
@@ -225,3 +271,71 @@ command_line:
         - flags
         - schools
       scan_interval: 300
+
+  # ── Bin day (optional, Home view) ────────────────────────────────────────
+  # No script ships for this: every council publishes collections its own
+  # way. Write one that prints JSON like
+  #   { "next_days": 2, "next_date": "2026-10-06",
+  #     "next_short": ["Black bin", "Food"],
+  #     "bins": [{ "name": "General waste", "short": "Black bin", "next": "2026-10-06" }],
+  #     "fetch": "ok", "error": null, "checked_at": "2026-10-04T06:00:00+01:00" }
+  # with next_days null when no future date is known. State is days to the
+  # next collection, or "unknown".
+  - sensor:
+      name: Bin Collections
+      unique_id: bin_collections
+      command: "python3 /config/scripts/bin-collections.py"
+      command_timeout: 60
+      # No unit_of_measurement: with one, HA insists on a number, rejects the
+      # "unknown" below at setup, and the entity goes unavailable (trap 24).
+      value_template: "{{ value_json.next_days if value_json.next_days is not none else 'unknown' }}"
+      json_attributes:
+        - bins
+        - next_date
+        - next_days
+        - next_short
+        - fetch
+        - error
+        - checked_at
+      scan_interval: 21600
+
+# ── The latest podcast episode (optional, Music view) ──────────────────────
+# Music Assistant plays a podcast from its oldest unplayed episode, and
+# play_media has no option to start from the newest (trap 23). So this reads
+# the feed itself and keeps the newest episode's audio URL as its state, picked
+# by pubDate rather than trusting feed order. script.music_play plays that URL
+# when a tile names this sensor in latest_from. The name gives the entity id
+# sensor.six_o_clock_news_latest, which the dashboard's news tile uses.
+sensor:
+  - platform: rest
+    name: Six O'Clock News Latest
+    unique_id: six_o_clock_news_latest
+    resource: PODCAST_FEED_URL
+    scan_interval: 1800
+    timeout: 20
+    icon: mdi:podcast
+    value_template: >-
+      {% set ns = namespace(t=0, url='') %}
+      {% for i in value_json.rss.channel['item'] %}
+      {% set t = as_timestamp(strptime(i.pubDate, '%a, %d %b %Y %H:%M:%S %z', none), 0) %}
+      {% if t > ns.t %}{% set ns.t = t %}{% set ns.url = i.enclosure['@url'] %}{% endif %}
+      {% endfor %}
+      {{ ns.url[:255] if ns.url else 'unknown' }}
+
+# ── Rain (optional, the Meadow) ────────────────────────────────────────────
+# The Meadow takes its weather from weather.forecast_home, and a rain sensor
+# adds the rain the forecast misses. Any sensor will do: set SENSORS.rain in
+# www/meadow.html to its id and list its wet and dry states in RAIN_STATES
+# (raining/none, wet/dry and on/off are understood already). A rain gauge's
+# binary_sensor works as it is. If yours reports a rate in mm/h, wrap it:
+#
+# template:
+#   - sensor:
+#       - name: Rain Sensor
+#         unique_id: rain_sensor
+#         state: >-
+#           {% set r = states('sensor.YOUR_RAIN_RATE') %}
+#           {{ 'unknown' if r in ['unknown', 'unavailable'] else 'raining' if r | float(0) > 0 else 'none' }}
+#
+# (add the "- sensor:" entry under the template: key above, not a second
+# template: key).
